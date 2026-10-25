@@ -1,7 +1,8 @@
 # Pushing a tag vX.Y.Z publishes a release that head mounts install over the air:
 #   git tag v1.0.0 && git push origin v1.0.0
 # The release carries benev-install.sh (the full installer: also usable on a fresh Pi), its
-# SHA-256, and a signature when the OTA_SIGNING_KEY secret is set (see README, "Updates").
+# SHA-256, a signature when the OTA_SIGNING_KEY secret is set (see README, "Updates"), and
+# the Android app android/Benev.apk.
 name: Release
 
 on:
@@ -46,4 +47,6 @@ jobs:
         run: |
           files="benev-install.sh benev-install.sh.sha256"
           if [ -f benev-install.sh.sig ]; then files="$files benev-install.sh.sig"; fi
+          # The Android app, so the release page offers it too (asset name: Benev.apk)
+          if [ -f android/Benev.apk ]; then files="$files android/Benev.apk"; fi
           gh release create "$GITHUB_REF_NAME" $files --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

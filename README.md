@@ -13,6 +13,37 @@ board: the same drivers, camera stack, web app and Wi-Fi setup. It is one self-c
 file. The app code is packed inside it, and the camera driver and libcamera are downloaded
 at fixed, tested versions.
 
+## Downloads
+
+Everything is on this repository's **Releases** page (right-hand side on GitHub). The newest
+release always has:
+
+| File | For |
+|---|---|
+| `benev-install.sh` | the installer for a fresh Raspberry Pi (see [Install](#install)) |
+| `Benev.apk` | the **Android app** |
+
+Direct link to the newest app (replace `<you>/<repo>` with this repository's name):
+`https://github.com/<you>/<repo>/releases/latest/download/Benev.apk`
+
+### Installing the Android app
+
+1. Open the link (or the Releases page) **on the phone** and download `Benev.apk`.
+2. Tap the downloaded file. Android asks to allow installing apps from this source (your
+   browser or Files app): allow it, go back, and tap *Install*.
+3. If Play Protect warns about an unknown app, choose *More details → Install anyway*. The
+   app is not from the Play Store, so Android doesn't know it.
+4. Connect the phone to the same Wi-Fi as the head mount (or to its "Benev AI" hotspot) and
+   open the app.
+
+### Publishing a new version of the app
+
+Replace `android/Benev.apk` with the new build, commit, and make a release (see
+[Making a release](#making-a-release)). The release then carries the new app. Two rules, or
+phones cannot update over the old app:
+- **sign every build with the same key** (the one this APK was signed with), and
+- **raise `versionCode`** in the app's build settings each time.
+
 ## What you need
 
 | Item | Notes |
