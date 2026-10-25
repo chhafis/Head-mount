@@ -6,3 +6,11 @@ __pycache__/
 *.pyc
 # Signing keys must never be committed (see README, "Updates")
 *ota-key*
+# Each head mount keeps its own settings and calibrations; they never belong in the repository
+lens-shading.json
+camera-tuning.json
+camera.json
+calibration.json
+outputs.json
+board.json
+media/

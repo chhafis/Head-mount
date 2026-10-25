@@ -470,3 +470,14 @@ button:disabled { opacity: 0.55; cursor: default; }
 .image-config label { display: grid; gap: 2px; font-size: 12px; color: var(--text-secondary); }
 .image-config label.check { display: flex; align-items: center; gap: 6px; }
 .image-config select { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); }
+
+/* ---------- brightness slider and lens card ---------- */
+.ev-row { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; font-size: 13px; color: var(--text-secondary); width: 100%; }
+.ev-row input[type="range"] { width: 100%; accent-color: var(--series-1); }
+.ev-row output { min-width: 3.2ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.ev-row button { padding: 4px 10px; }
+.image-config label:has(> input[type="range"]) { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: center; }
+.image-config input[type="range"] { accent-color: var(--series-1); width: 100%; }
+.lens-how { font-size: 13px; color: var(--text-secondary); }
+.lens-how summary { cursor: pointer; padding: 4px 0; }
+.lens-how ol { margin: 6px 0 6px 18px; padding: 0; display: grid; gap: 4px; }

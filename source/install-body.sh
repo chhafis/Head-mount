@@ -422,6 +422,25 @@ configure_boot() {
     fi
 }
 
+# Quick modes (--update, --app-only; OTA updates run --update) trust that a full install was done
+# before. Say so when the camera software is missing, instead of ending with a plain "Done".
+check_camera_stack() {
+    local missing=""
+    [[ -e /usr/local/lib/$TRIPLET/libcamera.so.$LIBCAMERA_VERSION ]] || missing+=" libcamera"
+    [[ -e /usr/local/share/libcamera/ipa/rpi/vc4/ar0234.json ]] || missing+=" camera-tuning"
+    [[ -d /usr/local/lib/python3/dist-packages/libcamera ]] || missing+=" libcamera-python"
+    find "/lib/modules/$(uname -r)" -name 'ar0234.ko*' 2>/dev/null | grep -q . || missing+=" camera-driver"
+    [[ -e /boot/firmware/overlays/ar0234.dtbo ]] || missing+=" camera-overlay"
+    if [[ -n $missing ]]; then
+        echo
+        echo "!! The camera software is not fully installed (missing:$missing)."
+        echo "!! The camera will show an error until you run the full installer (about an hour,"
+        echo "!! it skips what is done):   sudo bash ~/benev-install.sh"
+        CAMERA_STACK_MISSING=1
+    fi
+}
+CAMERA_STACK_MISSING=0
+
 # --- run -------------------------------------------------------------------------------------
 
 if [[ $UPDATE == 1 ]]; then
@@ -454,6 +473,9 @@ echo
 echo "=== Done $(date) ==="
 echo "Recorder: http://$(hostname | tr '[:upper:]' '[:lower:]').local  or  http://${IP:-<pi-address>}  (README: $APP_DIR/README.md)"
 echo "Without a known Wi-Fi network it starts the open hotspot \"Benev AI\": join it, the setup page opens."
+if [[ $UPDATE == 1 || $APP_ONLY == 1 ]]; then
+    check_camera_stack
+fi
 if [[ $UPDATE == 1 ]]; then
     if [[ -e /run/benev-reboot-required ]]; then echo "Boot settings changed: restart the head mount to finish."; fi
 elif [[ $APP_ONLY == 0 ]]; then

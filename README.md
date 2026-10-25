@@ -149,8 +149,11 @@ From top to bottom:
   the gyroscope and the magnetometer. *Set forward* makes the current direction "straight
   ahead". *North up* shows it relative to magnetic north instead. *Camera faces* says which IMU axis the
   lens looks along (+X on the first board; this is saved with every recording).
-- **Show camera**: optional live preview.
+- **Show camera**: optional live preview, with a **Brightness** slider under it (−2 to +2 stops;
+  *Reset* returns to the automatic level). It acts at once, with no restart, and is saved.
 - **Calibrate IMU & magnetometer**: see below.
+- **Camera lens**: calibrates this head mount's lens against dark, tinted edges (see
+  [Lens shading correction](#lens-shading-correction-dark-tinted-edges-of-the-170-lens)).
 - **Recordings**: every session with its length, size, frames and IMU rate.
   *Play* shows the video with the cube moving as recorded. *Download* gives a zip of the
   whole folder. *Delete* removes it (tap twice).
@@ -263,8 +266,16 @@ stock AR0234 tuning has none. **Calibrate once per lens** on the Device page:
 1. Cover the **whole lens** with a white diffuser: 2–3 layers of white printer paper, or the
    bottom of a white plastic cup. With a 170° view nothing else fills the picture evenly.
 2. Point it at an **even light**: a window with an overcast sky, or a ceiling lamp. Keep it
-   still. Avoid mixing daylight and lamp light.
-3. Press **Calibrate** under *Lens shading correction*. It takes about 10 seconds.
+   still. Avoid mixing daylight and lamp light. **Do not let a lamp show through as a bright
+   spot**: use more layers of paper, or lay the paper on a laptop or tablet screen showing
+   pure white and press the lens against it. A bright spot makes the calibration refuse
+   ("not an even white") or leaves a dark patch in the middle of the picture.
+3. Press **Calibrate** under *Lens shading correction* on the Device page, or **Calibrate this
+   camera's lens** in the *Camera lens* card on the Record page. It takes about 15 seconds.
+
+**Every head mount needs its own calibration**: each camera and lens has its own dark area.
+The result is stored only on that head mount (`~/BENEV/lens-shading.json`). It is not part
+of the installer or of updates, which keep it, and it is excluded from git.
 
 It then shows how much the edges were off, and the live view, photos and recordings are
 corrected from then on. It refuses (and keeps the old correction) if the picture is too dark,
@@ -279,7 +290,12 @@ adjusts the colour tables by itself.
 
 Limits:
 - The ISP can lift the edges at most **4×**. If the lens's image circle does not reach the
-  sensor's corners, those stay dark (the app says so). Then crop, or use a lower-resolution mode.
+  sensor's corners, those stay dark, and the app tells you how much of the picture that is.
+  With a lens that covers the sensor, this is near 0 %. One 170° lens tested here lit only a
+  circle about 1760 px across (the sensor is 1920×1200, 2264 px corner to corner) and sat
+  about 80 px off-centre, so 38 % of the picture could not be lifted. Cropping to the evenly
+  lit part would keep only about 62 % of the width, so a lens with a larger image circle (one
+  made for the sensor's 1/2.6" size or bigger), or centring the lens, is the real fix.
 - It corrects lens shading, not the lens distortion (the fisheye look).
 
 ## LEDs, fan and buttons

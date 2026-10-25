@@ -9,7 +9,7 @@ server.py runs this as a child process while the camera is in use. It owns the c
 
 argv:   width height fps
 stdin:  one JSON command per line: {"id": n, "cmd": "still" | "record_start" | "record_stop"
-        | "configure" | "shading_capture", ...}
+        | "configure" | "shading_capture" | "live", ...}
 stdout: records <u32 meta length><u32 JPEG length><meta JSON><JPEG>. Preview frames carry the
         current status; command replies and events carry an empty JPEG.
 """
@@ -143,6 +143,7 @@ class CameraService:
         self.preview_encoder = None
         self.recording = None
         self.config = None
+        self.live_controls = {}           # changed while running (brightness); kept across configure()
         self.configure(width, height, fps)
 
     # --- configuration
@@ -171,7 +172,7 @@ class CameraService:
             # HighQuality denoise caps the VideoCore ISP at ~16 fps for 1080p; stills still get it.
             controls={"FrameDurationLimits": (frame_us, frame_us),
                       "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.Fast,
-                      **image_controls()})
+                      **image_controls(), **self.live_controls})
         self._stop_preview()
         if self.picam2.started:
             self.picam2.stop()
@@ -227,6 +228,17 @@ class CameraService:
 
     # --- commands
 
+    LIVE_CONTROLS = ("ExposureValue",)
+
+    def set_live(self, wanted):
+        """Change ISP controls while the camera runs: no restart, no dropped frames."""
+        changes = {k: float(v) for k, v in wanted.items() if k in self.LIVE_CONTROLS}
+        if not changes:
+            raise ValueError("nothing to change")
+        self.live_controls.update(changes)
+        self.picam2.set_controls(changes)
+        return changes
+
     def record_start(self, folder=None):
         """Record into media/ (single video) or into a session folder (video + frames.csv)."""
         if self.recording:
@@ -278,7 +290,7 @@ class CameraService:
             # Full sensor readout, high-quality denoise, then straight back to video mode.
             cfg = self.picam2.create_still_configuration(
                 main={"size": self.full_size, "format": "BGR888"}, raw={"size": self.full_size},
-                transform=TRANSFORM, buffer_count=2, controls=image_controls())
+                transform=TRANSFORM, buffer_count=2, controls={**image_controls(), **self.live_controls})
             self._stop_preview()
             try:
                 request = self.picam2.switch_mode_and_capture_request(cfg, delay=2)
@@ -342,8 +354,9 @@ class CameraService:
             "centre_level_pct": round(float((centre - black[1]) / (top - black[1]) * 100), 1),
             "saturated_pct": round(float((mean >= 0.97 * top).mean() * 100), 2),
         })
+        grids = stats.pop("_grids", None)
         log(f"lens shading measured: {stats}")
-        return {"alsc": alsc, "stats": stats}
+        return {"alsc": alsc, "stats": stats, "grids": grids}
 
 
 def save_yuv420_jpeg(array, size, path):
@@ -380,6 +393,8 @@ def main():
                     reply["result"] = service.record_stop()
                 elif name == "shading_capture":
                     reply["result"] = service.shading_capture()
+                elif name == "live":
+                    reply["result"] = service.set_live(cmd["controls"])
                 elif name == "configure":
                     if service.recording:
                         raise RuntimeError("stop the recording before changing resolution or frame rate")

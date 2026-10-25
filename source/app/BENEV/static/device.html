@@ -126,6 +126,8 @@
           <label>Sharpening <select id="img-sharpness"></select></label>
           <label>Brightness measured over <select id="img-metering"></select></label>
           <label>Mains frequency (flicker-free exposure) <select id="img-mains"></select></label>
+          <label>Brightness <output id="img-ev-value" for="img-ev">±0.0</output>
+            <input type="range" id="img-ev" min="-2" max="2" step="0.1" value="0"></label>
           <label class="check"><input type="checkbox" id="img-ce"> Adaptive contrast enhancement</label>
           <p class="lens-help" id="img-help"></p>
           <div class="lens-actions"><button id="img-reset" type="button">Recommended settings</button></div>

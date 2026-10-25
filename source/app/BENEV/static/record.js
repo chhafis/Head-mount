@@ -181,6 +181,84 @@ document.addEventListener("visibilitychange", () => {
 let calRun = null;
 const calRunning = () => Boolean(calRun && calRun.running);
 
+// ---------- brightness (live exposure compensation) and the camera lens calibration
+
+let evDragging = false, evTimer = null, evPending = null;
+
+function fmtEv(v) {
+  return `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(1)}`;
+}
+
+function sendEv(v) {   // live: the camera does not restart
+  if (evTimer) { evPending = v; return; }
+  post("/api/camera", { action: "brightness", ev: v }).catch((e) => message(e.message, true));
+  evTimer = setTimeout(() => {
+    evTimer = null;
+    if (evPending != null) { const next = evPending; evPending = null; sendEv(next); }
+  }, 150);
+}
+
+$("ev-slider").addEventListener("pointerdown", () => { evDragging = true; });
+for (const ev of ["pointerup", "pointercancel", "blur"]) $("ev-slider").addEventListener(ev, () => { evDragging = false; });
+$("ev-slider").addEventListener("input", (e) => {
+  const v = Number(e.target.value);
+  $("ev-value").textContent = fmtEv(v);
+  sendEv(v);
+});
+$("ev-reset").addEventListener("click", () => {
+  $("ev-slider").value = "0";
+  $("ev-value").textContent = fmtEv(0);
+  sendEv(0);
+});
+
+function renderBrightness() {
+  const img = last.camera && last.camera.image;
+  if (!img || evDragging || evTimer) return;
+  $("ev-slider").value = String(img.ev);
+  $("ev-value").textContent = fmtEv(img.ev);
+}
+
+let lensBusy = false;
+
+function renderLens() {
+  $("lens-button").disabled = lensBusy || Boolean(session);   // not while recording
+  const lens = last.camera && last.camera.lens;
+  if (!lens || lensBusy) return;
+  const st = lens.stats || {};
+  const when = lens.time ? new Date(lens.time.replace(/([+-]\d\d)(\d\d)$/, "$1:$2")) : null;
+  const stamp = when && !isNaN(when)
+    ? ` ${when.toLocaleDateString([], { month: "short", day: "numeric" })} ${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+  $("lens-summary").textContent = lens.calibrated
+    ? `Calibrated${stamp}` + (st.dark_area_pct != null ? ` · ${Math.round(st.dark_area_pct)} % of the picture still dark` : "")
+    : "Not calibrated: edges are dark and tinted";
+  $("lens-button").textContent = lens.calibrated ? "Calibrate this camera's lens again" : "Calibrate this camera's lens";
+}
+
+$("lens-button").addEventListener("click", async () => {
+  const msg = $("lens-msg"), btn = $("lens-button");
+  lensBusy = true;
+  btn.disabled = true;
+  msg.classList.remove("error");
+  msg.textContent = "Measuring… keep the white cover on the lens and hold still.";
+  try {
+    const reply = await post("/api/camera", { action: "lens_calibrate" });
+    const r = reply.result;
+    if (r.problems) {
+      msg.textContent = `Not saved: ${r.problems.join(" ")}`;
+      msg.classList.add("error");
+    } else {
+      msg.textContent = `Saved. ${(r.warnings || []).join(" ")}`;
+    }
+    last.camera = { ...(last.camera || {}), ...reply.status };
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.classList.add("error");
+  } finally {
+    lensBusy = false;
+    renderLens();
+  }
+});
+
 $("cal-button").addEventListener("click", async () => {
   try {
     const r = await post("/api/calibration", { action: "start" });
@@ -357,6 +435,8 @@ function onMessage(msg) {
   renderChips(msg);
   renderRecording();
   renderCalibration();
+  renderBrightness();
+  renderLens();
 }
 
 function connect() {

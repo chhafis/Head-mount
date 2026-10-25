@@ -174,6 +174,19 @@ class CameraFeed:
         self.update_settings(image=saved)
         self.restart()
 
+    def set_brightness(self, ev):
+        """Exposure compensation in stops (-2..+2). Saved, and applied at once if the camera runs."""
+        ev = image_tuning.validate({"ev": ev})["ev"]
+        self.update_settings(image={**(self.settings.get("image") or {}), "ev": ev})
+        with self.cond:
+            running = self.ready and self.proc is not None and self.proc is not self.stopping
+        if running:   # otherwise the saved value is used when the camera next starts
+            try:
+                self.command({"cmd": "live", "controls": {"ExposureValue": ev}}, timeout=10)
+            except CameraError as e:
+                log.warning("brightness not applied live: %s", e)
+        return ev
+
     def set_lens(self, data):
         """Save (or with None remove) the lens calibration and restart the worker with it."""
         if data is None:
@@ -232,6 +245,12 @@ class CameraFeed:
 
     def _start(self):
         self.state, self.error, self.meta, self.ready = "starting", None, None, False
+        if not (Path(LIBCAMERA_PYTHONPATH) / "libcamera").is_dir():
+            # Seen on a Pi whose installer was interrupted during the libcamera build.
+            self.state = "error"
+            self.error = ("libcamera is not installed (the installer did not finish): "
+                          "run  sudo bash ~/benev-install.sh  on the Pi")
+            return
         s = self.settings
         env = {**os.environ, "PYTHONPATH": LIBCAMERA_PYTHONPATH, "LIBCAMERA_LOG_LEVELS": "*:WARN"}
         image = self.image_settings()

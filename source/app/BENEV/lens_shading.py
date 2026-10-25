@@ -14,7 +14,8 @@ import numpy as np
 
 GRID = (16, 12)              # vc4 ALSC cells (columns, rows)
 MAX_GAIN = 3.999             # largest gain the tables may hold
-DEFAULT_STRENGTH = 0.8       # share of the luminance fall-off corrected (1 = fully flat, noisier corners)
+DEFAULT_STRENGTH = 1.0       # share of the luminance fall-off corrected (1 = fully flat; edges get noisier)
+RELIABLE_FRACTION = 0.06     # cells dimmer than this share of the brightest are noise: their colour is filled in
 
 
 def unpack_raw(array, fmt, width, height):
@@ -78,6 +79,29 @@ def _median3(t):
     return np.median(np.stack(stack), axis=0)
 
 
+def _fill_unreliable(table, reliable):
+    """Replace table values where reliable is False by the average of the nearest reliable ones,
+    spreading outwards ring by ring (near-black corner cells hold only noise)."""
+    t = table.copy()
+    ok = reliable.copy()
+    rows, cols = t.shape
+    if not ok.any():
+        return t
+    while not ok.all():
+        new_vals = {}
+        for r in range(rows):
+            for c in range(cols):
+                if ok[r, c]:
+                    continue
+                near = [t[rr, cc] for rr in range(max(r - 1, 0), min(r + 2, rows))
+                        for cc in range(max(c - 1, 0), min(c + 2, cols)) if ok[rr, cc]]
+                if near:
+                    new_vals[(r, c)] = float(np.mean(near))
+        for (r, c), v in new_vals.items():
+            t[r, c], ok[r, c] = v, True
+    return t
+
+
 def compute_alsc(planes, black_levels, colour_temp, luminance_strength=DEFAULT_STRENGTH):
     """planes: {"R","Gr","Gb","B"} (any common scale); black_levels: same scale, in that order.
     -> (rpi.alsc dict for the tuning file, statistics for the user)."""
@@ -86,8 +110,9 @@ def compute_alsc(planes, black_levels, colour_temp, luminance_strength=DEFAULT_S
     g = (grids["Gr"] + grids["Gb"]) / 2
     lum = _median3(1 / g)
     lum = lum / lum.min()
-    cr = _median3(g / grids["R"])
-    cb = _median3(g / grids["B"])
+    reliable = g > RELIABLE_FRACTION * g.max()
+    cr = _median3(_fill_unreliable(g / grids["R"], reliable))
+    cb = _median3(_fill_unreliable(g / grids["B"], reliable))
 
     def table(t):
         return [round(float(v), 3) for v in np.clip(t, 0, MAX_GAIN).flatten()]
@@ -112,9 +137,18 @@ def compute_alsc(planes, black_levels, colour_temp, luminance_strength=DEFAULT_S
         "red_shift_pct": round(float((np.max(np.abs(rg / rg[centre].mean() - 1))) * 100), 1),
         "blue_shift_pct": round(float((np.max(np.abs(bg / bg[centre].mean() - 1))) * 100), 1),
         "clipped_cells": int((lum > MAX_GAIN).sum() + (cr > MAX_GAIN).sum() + (cb > MAX_GAIN).sum()),
+        # Share of the picture that needs more than the ISP's 4x brightening: it stays dark.
+        "dark_area_pct": round(float((lum > MAX_GAIN).mean() * 100), 1),
         "unevenness_pct": unevenness_pct(g),
     }
+    # The measured grids, for checking a calibration by hand (not saved with the correction)
+    stats["_grids"] = {"green": np.round(g, 1).tolist(), "red_over_green": np.round(rg, 3).tolist(),
+                       "blue_over_green": np.round(bg, 3).tolist()}
     return alsc, stats
+
+
+UNEVEN_PROBLEM_PCT = 20.0    # a patch this far from its surroundings: not a plain cover (thresholds: see tests)
+UNEVEN_WARNING_PCT = 10.0
 
 
 def assess(stats):
@@ -126,27 +160,34 @@ def assess(stats):
                         "to the diffuser or use less light.")
     if stats["centre_level_pct"] < 8:
         problems.append(f"Too dark (centre at {stats['centre_level_pct']} % of full scale): use more light.")
-    if stats["unevenness_pct"] > 15:
-        problems.append(f"The view is not an even white ({stats['unevenness_pct']} % off a smooth fall-off): "
-                        "the diffuser must cover the whole lens, with nothing else in view and even light.")
-    elif stats["unevenness_pct"] > 8:
+    if stats["unevenness_pct"] > UNEVEN_PROBLEM_PCT:
+        problems.append(f"The view is not an even white (a patch is {stats['unevenness_pct']} % brighter or darker than "
+                        "its surroundings): the diffuser must cover the whole lens, with nothing else in view and even light.")
+    elif stats["unevenness_pct"] > UNEVEN_WARNING_PCT:
         warnings.append(f"The light was a little uneven ({stats['unevenness_pct']} %); for the best result, "
                         "use a more even light or a thicker diffuser.")
-    if stats["clipped_cells"]:
-        warnings.append(f"The corners are darker than the ISP can fully lift (gains are limited to 4×; corners at "
-                        f"{stats['corner_brightness_pct']} % of the centre), so they stay a little darker.")
+    if stats["dark_area_pct"] >= 1:
+        warnings.append(f"{stats['dark_area_pct']} % of the picture (its corners and edges, down to "
+                        f"{stats['corner_brightness_pct']} % of the centre's brightness) is darker than the image "
+                        "processor can lift (limit 4×), so it stays dark. The lens does not cover the whole sensor: "
+                        "crop the picture or use a lens with a larger image circle.")
     return problems, warnings
 
 
 def unevenness_pct(g):
-    """Largest deviation of any cell from a smooth fall-off (a 4th-order surface fit), in %.
-    Large values mean uneven light, a gap in the diffuser, or something in view."""
+    """How far the most out-of-line cell is from a smooth fall-off, in %.
+
+    A plain cover under even light gives a smooth bowl in log brightness, which a 4th-order
+    surface follows closely. A shadow, a bright patch or a gap in the diffuser does not fit.
+    Cells below 10 % of the peak are left out (noise, and the log makes them dominate)."""
     rows, cols = g.shape
-    y, x = np.mgrid[0:rows, 0:cols]
-    x = (x - (cols - 1) / 2) / cols
-    y = (y - (rows - 1) / 2) / rows
-    terms = [x ** i * y ** j for i in range(5) for j in range(5 - i)]
-    a = np.stack([t.flatten() for t in terms], axis=1)
-    z = np.log(g.flatten())
-    coef, *_ = np.linalg.lstsq(a, z, rcond=None)
-    return round(float(np.max(np.abs(np.expm1(z - a @ coef))) * 100), 1)
+    valid = g > 0.10 * g.max()
+    if valid.sum() < 40:
+        return 0.0
+    yy, xx = np.mgrid[0:rows, 0:cols]
+    x = (xx - (cols - 1) / 2) / cols
+    y = (yy - (rows - 1) / 2) / rows
+    terms = np.stack([(x ** i * y ** j)[valid] for i in range(5) for j in range(5 - i)], axis=1)
+    z = np.log(g[valid])
+    coef, *_ = np.linalg.lstsq(terms, z, rcond=None)
+    return round(float(np.max(np.abs(np.expm1(z - terms @ coef))) * 100), 1)

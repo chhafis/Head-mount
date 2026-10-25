@@ -783,6 +783,24 @@ const IMG_MAINS = [[50, "50 Hz (India, Europe)"], [60, "60 Hz (Americas)"], [0, 
 const IMG_SHARPNESS = [[0, "Off"], [0.5, "Low"], [1, "Normal"], [1.5, "High"], [2, "Very high"]];
 const IMG_METERING = [["matrix", "the whole view"], ["centre-weighted", "the centre"]];
 let imgBusy = false;
+let evDragging = false, evTimer = null, evPending = null;
+
+function fmtEv(v) {
+  return `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(1)}`;
+}
+
+function sendEv(v) {   // live: the camera does not restart
+  if (evTimer) { evPending = v; return; }
+  postJson("/api/camera", { action: "brightness", ev: v }).catch((e) => {
+    const m = document.getElementById("img-msg");
+    m.textContent = e.message;
+    m.classList.add("error");
+  });
+  evTimer = setTimeout(() => {
+    evTimer = null;
+    if (evPending != null) { const next = evPending; evPending = null; sendEv(next); }
+  }, 150);
+}
 
 function fillSelect(select, options) {
   if (select.options.length) return;
@@ -813,6 +831,10 @@ function renderImage(c) {
   if (document.activeElement !== sharp) setSelectNear(sharp, c.image.sharpness);
   if (document.activeElement !== meter) meter.value = c.image.metering;
   if (document.activeElement !== ce) ce.checked = c.image.contrast_enhance;
+  if (!evDragging && !evTimer) {
+    document.getElementById("img-ev").value = String(c.image.ev);
+    document.getElementById("img-ev-value").textContent = fmtEv(c.image.ev);
+  }
   const cam = c.camera && c.camera.config;
   document.getElementById("img-help").textContent =
     "A shorter exposure means less motion blur when the head moves; the camera makes up the light with gain, " +
@@ -842,6 +864,19 @@ for (const [id, key, parse] of [["img-exposure", "max_exposure_ms", Number], ["i
   ["img-metering", "metering", String], ["img-mains", "mains_hz", Number]]) {
   document.getElementById(id).addEventListener("change", (ev) => imageAction({ action: "image", [key]: parse(ev.target.value) }));
 }
+const evSlider = document.getElementById("img-ev");
+evSlider.addEventListener("pointerdown", () => { evDragging = true; });
+for (const ev of ["pointerup", "pointercancel", "blur"]) evSlider.addEventListener(ev, () => { evDragging = false; });
+evSlider.addEventListener("input", (e) => {
+  const v = Number(e.target.value);
+  document.getElementById("img-ev-value").textContent = fmtEv(v);
+  sendEv(v);
+});
+evSlider.addEventListener("dblclick", () => {
+  evSlider.value = "0";
+  document.getElementById("img-ev-value").textContent = fmtEv(0);
+  sendEv(0);
+});
 document.getElementById("img-ce").addEventListener("change", (ev) => imageAction({ action: "image", contrast_enhance: ev.target.checked }));
 document.getElementById("img-reset").addEventListener("click", () => imageAction({ action: "image_reset" }));
 
@@ -851,7 +886,8 @@ let lensBusy = false;
 
 function lensSummary(st) {
   return `edges were up to ${fmt(st.red_shift_pct, 0)} % off in red and ${fmt(st.blue_shift_pct, 0)} % in blue, ` +
-    `corners at ${fmt(st.corner_brightness_pct, 0)} % of the centre's brightness`;
+    `corners at ${fmt(st.corner_brightness_pct, 0)} % of the centre's brightness` +
+    (st.dark_area_pct != null ? `; ${fmt(st.dark_area_pct, 0)} % of the picture is still darker than can be lifted` : "");
 }
 
 function renderLens(lens) {
@@ -908,7 +944,8 @@ function updateCamera(c) {
   box.querySelector(".status-text").textContent = !c.present ? "Driver not loaded"
     : c.recording ? "Recording" : { off: "Idle", starting: "Starting", live: "Running", error: "Error" }[c.state];
   box.querySelector(".detail").textContent = c.error
-    || (c.state === "live" ? `${c.viewers} in use` : "CSI-2 2-lane · I²C-10 @ 0x10");
+    || (!c.present ? "Camera chip not detected: restart the Pi once after installing, and check the ribbon cable"
+      : c.state === "live" ? `${c.viewers} in use` : "CSI-2 2-lane · I²C-10 @ 0x10");
 
   const s = c.settings;
   if (!camEditing && s) {

@@ -56,6 +56,11 @@
           <div class="rec-badge" id="rec-badge" hidden><span class="rec-dot" aria-hidden="true"></span>REC</div>
         </div>
         <button type="button" id="preview-toggle" aria-pressed="false">Show camera</button>
+        <label class="ev-row">Brightness
+          <input type="range" id="ev-slider" min="-2" max="2" step="0.1" value="0" aria-describedby="ev-value">
+          <output id="ev-value" for="ev-slider">±0.0</output>
+          <button type="button" id="ev-reset" title="Back to the automatic level">Reset</button>
+        </label>
       </figure>
     </div>
   </section>
@@ -79,6 +84,24 @@
       <button type="button" id="wizard-cancel">Cancel</button>
     </div>
     <div class="cal-result" id="cal-result" hidden></div>
+  </section>
+
+  <section class="card" aria-labelledby="lens-h">
+    <div class="card-head">
+      <h2 id="lens-h">Camera lens</h2>
+      <span class="muted" id="lens-summary">Checking…</span>
+    </div>
+    <button type="button" class="wide-button" id="lens-button">Calibrate this camera's lens</button>
+    <details class="lens-how">
+      <summary>How to calibrate</summary>
+      <ol>
+        <li>Cover the <strong>whole lens</strong> with a white diffuser: 2–3 layers of white paper, or paper laid on a screen showing pure white.</li>
+        <li>Point it at an even light (a window, or a ceiling), with no lamp showing through as a bright spot. Keep it still.</li>
+        <li>Press the button and wait about 15 seconds.</li>
+      </ol>
+      <p class="muted">Every camera and lens is different, so each head mount is calibrated on its own, and the result stays on that head mount.</p>
+    </details>
+    <p class="camera-msg" id="lens-msg" role="status"></p>
   </section>
 
   <section class="card" aria-labelledby="sessions-h">

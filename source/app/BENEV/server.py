@@ -14,7 +14,7 @@ the folder format. POST endpoints take JSON:
   /api/outputs      {"name", "level": 0-100}           (manual outputs only)
   /api/board        {"fan_normal_pct", "fan_full_c", "fan_back_c", "battery_low_pct", "unplug_shutdown_s"}
   /api/camera       {"action": "still" | "record_start" | "record_stop" | "configure" | "settings"
-                     | "lens_calibrate" | "lens_reset" | "image" | "image_reset", ...}
+                     | "lens_calibrate" | "lens_reset" | "image" | "image_reset" | "brightness", ...}
   /api/system       {"action": "shutdown" | "reboot"}
   /api/update       {"action": "check" | "install"}       (GET: state of the GitHub updater)
 GET /api/status: version, recording, power and battery in one small object.
@@ -589,11 +589,15 @@ class Handler(BaseHTTPRequestHandler):
             measured = camera.command({"cmd": "shading_capture"}, timeout=120)
             problems, warnings = lens_shading.assess(measured["stats"])
             if problems:   # nothing saved: the old correction (if any) stays
-                result = {"saved": False, "problems": problems, "stats": measured["stats"]}
+                result = {"saved": False, "problems": problems, "stats": measured["stats"],
+                          "grids": measured.get("grids")}
             else:
                 camera.set_lens({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "stats": measured["stats"],
                                  "warnings": warnings, "alsc": measured["alsc"]})
-                result = {"saved": True, "warnings": warnings, "stats": measured["stats"]}
+                result = {"saved": True, "warnings": warnings, "stats": measured["stats"],
+                          "grids": measured.get("grids")}
+        elif action == "brightness":   # live, also while recording: nothing restarts
+            result = {"ev": camera.set_brightness(body["ev"])}
         elif action in ("image", "image_reset"):
             if self.app.recording():
                 raise RuntimeError("stop the recording first")
