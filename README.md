@@ -15,16 +15,19 @@ at fixed, tested versions.
 
 ## Downloads
 
-Everything is on this repository's **Releases** page (right-hand side on GitHub). The newest
-release always has:
+Everything is on the **[Releases page](https://github.com/chhafis/Head-mount/releases/latest)**.
+The newest release always has:
 
-| File | For |
-|---|---|
-| `benev-install.sh` | the installer for a fresh Raspberry Pi (see [Install](#install)) |
-| `Benev.apk` | the **Android app** |
+| File | For | Direct link to the newest |
+|---|---|---|
+| `benev-install.sh` | the installer for a fresh Raspberry Pi (see [Install](#install)) | [benev-install.sh](https://github.com/chhafis/Head-mount/releases/latest/download/benev-install.sh) |
+| `Benev.apk` | the **Android app** | [Benev.apk](https://github.com/chhafis/Head-mount/releases/latest/download/Benev.apk) |
 
-Direct link to the newest app (replace `<you>/<repo>` with this repository's name):
-`https://github.com/<you>/<repo>/releases/latest/download/Benev.apk`
+On the Pi itself, download the installer with:
+```
+wget https://github.com/chhafis/Head-mount/releases/latest/download/benev-install.sh
+```
+An installer from a release already knows this repository, so its head mounts update from it.
 
 ### Installing the Android app
 
@@ -327,31 +330,25 @@ internet.
 
 ## Updates over the air
 
-Head mounts update themselves from **GitHub Releases** of this folder's repository. A release
-is made by GitHub Actions (`.github/workflows/release.yml`) whenever you push a version tag.
+Head mounts update themselves from the **GitHub Releases** of
+[chhafis/Head-mount](https://github.com/chhafis/Head-mount). A release is made by GitHub
+Actions (`.github/workflows/release.yml`) whenever you push a version tag.
 
-### One-time setup
+### Which head mounts update from here
 
-1. **Create a repository** on github.com (e.g. `benev-headmount`). Public is simplest; for a
-   private one see below.
-2. **Push this folder** (`BENEV-dashboard-installer`) to it, from Git Bash:
-   ```
-   cd "/d/head mount/head mount software/BENEV-dashboard-installer"
-   git init -b main
-   git add .
-   git commit -m "Benev head mount software"
-   git remote add origin https://github.com/<you>/<repo>.git
-   git push -u origin main
-   ```
-   `.gitattributes` keeps Linux line endings even on Windows; the built `benev-install.sh` is
-   not committed (releases carry it).
-3. **Tell the existing head mount where to look** (new installs from a release know it already):
-   ```
-   ssh <user>@benev.local
-   sudo bash ~/benev-install.sh --app-only --ota-repo <you>/<repo>
-   ```
-   or edit `"repo"` in `/etc/benev/ota.json` (root only, on purpose: the web page must not be
-   able to choose what code runs on the head mount).
+- Installed with a `benev-install.sh` **from a release**, or built on a PC whose git `origin`
+  is this repository: yes, by themselves.
+- Installed with an older build that doesn't know the repository (the Device page says
+  *No update source*): tell it once, over SSH:
+  ```
+  sudo bash ~/benev-install.sh --app-only --ota-repo chhafis/Head-mount
+  ```
+  or edit `"repo"` in `/etc/benev/ota.json`. Only root can change it, on purpose: the web page
+  must not be able to choose what code runs on the head mount.
+
+The folder is in git with `origin` = `https://github.com/chhafis/Head-mount.git`.
+`.gitattributes` keeps Linux line endings even on Windows; the built `benev-install.sh` is not
+committed (releases carry it).
 
 ### Making a release
 

@@ -14,10 +14,18 @@ find "$stage" \( -name __pycache__ -o -name '*.pyc' \) -prune -exec rm -rf {} +
 # GitHub workflow) or, for local builds, git's description (dev builds count as older).
 version=${BENEV_VERSION:-$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo dev)}
 printf '%s\nbuilt %s\n' "$version" "$(date -u +%Y-%m-%dT%H:%MZ)" > "$stage/BENEV/VERSION"
-# Release builds know their repository, so installed boards update from it (BENEV_OTA_REPO).
+# Builds know their repository, so installed boards update from it: BENEV_OTA_REPO (set by
+# the GitHub workflow), else the GitHub repository of this checkout's git origin.
+repo=${BENEV_OTA_REPO:-}
+if [[ -z $repo ]]; then
+    origin=$(git -C "$here" remote get-url origin 2>/dev/null || true)
+    if [[ $origin =~ github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$ ]]; then
+        repo=${BASH_REMATCH[1]%.git}
+    fi
+fi
 rm -f "$stage/BENEV/system/ota-repo"
-if [[ -n ${BENEV_OTA_REPO:-} ]]; then
-    echo "$BENEV_OTA_REPO" > "$stage/BENEV/system/ota-repo"
+if [[ -n $repo ]]; then
+    echo "$repo" > "$stage/BENEV/system/ota-repo"
 fi
 
 # Windows line endings would break bash and Python on the Pi.
@@ -33,4 +41,4 @@ fi
 } > "$out"
 chmod +x "$out"
 bash -n "$out"
-echo "Built $out ($(wc -c < "$out") bytes), version $version"
+echo "Built $out ($(wc -c < "$out") bytes), version $version, updates from ${repo:-nowhere (no repository)}"
