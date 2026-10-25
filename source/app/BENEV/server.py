@@ -13,7 +13,8 @@ the folder format. POST endpoints take JSON:
   /api/wifi         {"action": "connect", "ssid", "password"} | "scan" | "forget" | "hotspot" | "rejoin"
   /api/outputs      {"name", "level": 0-100}           (manual outputs only)
   /api/board        {"fan_normal_pct", "fan_full_c", "fan_back_c", "battery_low_pct", "unplug_shutdown_s"}
-  /api/camera       {"action": "still" | "record_start" | "record_stop" | "configure" | "settings", ...}
+  /api/camera       {"action": "still" | "record_start" | "record_stop" | "configure" | "settings"
+                     | "lens_calibrate" | "lens_reset" | "image" | "image_reset", ...}
   /api/system       {"action": "shutdown" | "reboot"}
   /api/update       {"action": "check" | "install"}       (GET: state of the GitHub updater)
 GET /api/status: version, recording, power and battery in one small object.
@@ -35,6 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import lens_shading
 from board import Board
 from camera import MEDIA, MEDIA_TYPES, CameraError, CameraFeed, list_media, media_path, sensor_present
 from motion import Calibration, CalibrationRun, MotionPipeline
@@ -581,6 +583,27 @@ class Handler(BaseHTTPRequestHandler):
                 changes["front_axis"] = body["front_axis"]
             camera.update_settings(**changes)
             result = camera.settings
+        elif action == "lens_calibrate":
+            if self.app.recording():
+                raise RuntimeError("stop the recording first")
+            measured = camera.command({"cmd": "shading_capture"}, timeout=120)
+            problems, warnings = lens_shading.assess(measured["stats"])
+            if problems:   # nothing saved: the old correction (if any) stays
+                result = {"saved": False, "problems": problems, "stats": measured["stats"]}
+            else:
+                camera.set_lens({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "stats": measured["stats"],
+                                 "warnings": warnings, "alsc": measured["alsc"]})
+                result = {"saved": True, "warnings": warnings, "stats": measured["stats"]}
+        elif action in ("image", "image_reset"):
+            if self.app.recording():
+                raise RuntimeError("stop the recording first")
+            camera.set_image(None if action == "image_reset" else {k: v for k, v in body.items() if k != "action"})
+            result = camera.image_settings()
+        elif action == "lens_reset":
+            if self.app.recording():
+                raise RuntimeError("stop the recording first")
+            camera.set_lens(None)
+            result = {"saved": False, "removed": True}
         else:
             raise ValueError(f"unknown action {action!r}")
         self._send_json({"ok": True, "result": result, "status": camera.status()})

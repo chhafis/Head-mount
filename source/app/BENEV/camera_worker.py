@@ -9,11 +9,12 @@ server.py runs this as a child process while the camera is in use. It owns the c
 
 argv:   width height fps
 stdin:  one JSON command per line: {"id": n, "cmd": "still" | "record_start" | "record_stop"
-        | "configure", ...}
+        | "configure" | "shading_capture", ...}
 stdout: records <u32 meta length><u32 JPEG length><meta JSON><JPEG>. Preview frames carry the
         current status; command replies and events carry an empty JPEG.
 """
 import json
+import os
 import signal
 import struct
 import sys
@@ -35,6 +36,22 @@ H264_MAX = (1920, 1080)         # largest frame the VideoCore H.264 encoder acce
 # ISP or encoder falls behind: 1200p30 MJPEG -> 28.4 fps, 1080p60 -> 44, 720p100 -> 79).
 RECORD_MAX_FPS = {(1920, 1200): 25, (1920, 1080): 30, (1280, 720): 60, (960, 600): 100}
 JPEG_QUALITY = 95
+SHADING_FRAMES = 8              # raw frames averaged for the lens shading calibration
+
+
+def image_controls():
+    """ISP controls from the image settings (image_tuning.controls, passed by camera.py as JSON):
+    exposure mode, metering, exposure compensation, sharpness, contrast, saturation."""
+    try:
+        wanted = json.loads(os.environ.get("BENEV_IMAGE_CONTROLS") or "{}")
+    except ValueError:
+        return {}
+    enums = {"AeExposureMode": controls.AeExposureModeEnum, "AeMeteringMode": controls.AeMeteringModeEnum,
+             "AeConstraintMode": controls.AeConstraintModeEnum, "AeFlickerMode": controls.AeFlickerModeEnum}
+    out = {}
+    for key, value in wanted.items():
+        out[key] = getattr(enums[key], value) if key in enums else value
+    return out
 TRANSFORM = Transform()   # libcamera already corrects the 180° mounting from the overlay (rotation=180)
 
 out_lock = threading.Lock()
@@ -113,7 +130,9 @@ class FrameLoggingOutput(PyavOutput):
 
 class CameraService:
     def __init__(self, width, height, fps):
-        self.picam2 = Picamera2()
+        # The lens shading calibration travels in a copy of the sensor's tuning file (camera.py).
+        # Picamera2 ignores the LIBCAMERA_RPI_TUNING_FILE variable, so it is passed here.
+        self.picam2 = Picamera2(tuning=os.environ.get("BENEV_TUNING_FILE") or None)
         self.modes = sorted({(m["size"], round(m["fps"], 1), m["bit_depth"]) for m in self.picam2.sensor_modes},
                             key=lambda m: m[0][0] * m[0][1])
         self.full_size = max((m[0] for m in self.modes), key=lambda s: s[0] * s[1])
@@ -151,7 +170,8 @@ class CameraService:
             buffer_count=6,
             # HighQuality denoise caps the VideoCore ISP at ~16 fps for 1080p; stills still get it.
             controls={"FrameDurationLimits": (frame_us, frame_us),
-                      "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.Fast})
+                      "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.Fast,
+                      **image_controls()})
         self._stop_preview()
         if self.picam2.started:
             self.picam2.stop()
@@ -258,7 +278,7 @@ class CameraService:
             # Full sensor readout, high-quality denoise, then straight back to video mode.
             cfg = self.picam2.create_still_configuration(
                 main={"size": self.full_size, "format": "BGR888"}, raw={"size": self.full_size},
-                transform=TRANSFORM, buffer_count=2)
+                transform=TRANSFORM, buffer_count=2, controls=image_controls())
             self._stop_preview()
             try:
                 request = self.picam2.switch_mode_and_capture_request(cfg, delay=2)
@@ -276,6 +296,54 @@ class CameraService:
             request.release()
         log(f"saved {', '.join(files)} at {size[0]}x{size[1]}")
         return {"files": files, "size": list(size)}
+
+    def shading_capture(self):
+        """Average raw flat-field frames at full sensor size -> lens shading tables (lens_shading.py).
+        Full size so the tables cover the whole sensor; libcamera crops them for smaller modes."""
+        if self.recording:
+            raise RuntimeError("stop the recording first")
+        import numpy as np
+        import lens_shading
+        cfg = self.picam2.create_still_configuration(
+            main={"size": (640, 400), "format": "YUV420"}, raw={"size": self.full_size},
+            transform=TRANSFORM, buffer_count=2)
+        self._stop_preview()
+        self.picam2.stop()
+        acc, mds = None, []
+        try:
+            self.picam2.configure(cfg)
+            self.picam2.start()
+            for _ in range(20):   # let exposure and white balance settle on the flat field
+                self.picam2.capture_metadata()
+            raw_cfg = self.picam2.camera_config["raw"]
+            fmt, (w, h) = raw_cfg["format"], raw_cfg["size"]
+            for _ in range(SHADING_FRAMES):
+                request = self.picam2.capture_request()
+                try:
+                    img, depth = lens_shading.unpack_raw(request.make_array("raw"), fmt, w, h)
+                    mds.append(request.get_metadata())
+                finally:
+                    request.release()
+                acc = img.astype(np.float32) if acc is None else acc + img
+        finally:
+            c = self.config
+            self.configure(c["width"], c["height"], c["fps"])   # back to video, preview restarts
+        mean = acc / len(mds)
+        top = 2 ** depth - 1
+        md = mds[-1]
+        black = [b / 2 ** (16 - depth) for b in md.get("SensorBlackLevels") or [2688] * 4]
+        planes = lens_shading.split_bayer(mean, fmt)
+        alsc, stats = lens_shading.compute_alsc(planes, black, md.get("ColourTemperature"))
+        g = (lens_shading.grid_means(planes["Gr"]) + lens_shading.grid_means(planes["Gb"])) / 2
+        centre = g[5:7, 7:9].mean()
+        stats.update({
+            "frames": len(mds), "raw_format": str(fmt), "size": [w, h],
+            "exposure_ms": round(md.get("ExposureTime", 0) / 1000, 2), "analog_gain": round(md.get("AnalogueGain", 0), 2),
+            "centre_level_pct": round(float((centre - black[1]) / (top - black[1]) * 100), 1),
+            "saturated_pct": round(float((mean >= 0.97 * top).mean() * 100), 2),
+        })
+        log(f"lens shading measured: {stats}")
+        return {"alsc": alsc, "stats": stats}
 
 
 def save_yuv420_jpeg(array, size, path):
@@ -310,6 +378,8 @@ def main():
                     reply["result"] = service.record_start(cmd.get("dir"))
                 elif name == "record_stop":
                     reply["result"] = service.record_stop()
+                elif name == "shading_capture":
+                    reply["result"] = service.shading_capture()
                 elif name == "configure":
                     if service.recording:
                         raise RuntimeError("stop the recording before changing resolution or frame rate")

@@ -459,3 +459,14 @@ button:disabled { opacity: 0.55; cursor: default; }
   margin: 6px 0 0; white-space: pre-wrap; font-size: 12px; max-height: 220px; overflow: auto;
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text-secondary);
 }
+
+/* ---------- Device page: lens shading correction ---------- */
+.image-config, .lens-config { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px 12px; margin: 0; display: grid; gap: 8px; }
+.image-config legend, .lens-config legend { color: var(--text-secondary); font-size: 12px; padding: 0 4px; }
+.lens-status { font-size: 13px; }
+.lens-help { font-size: 12px; color: var(--text-secondary); }
+.lens-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.image-config { display: grid; gap: 8px; }
+.image-config label { display: grid; gap: 2px; font-size: 12px; color: var(--text-secondary); }
+.image-config label.check { display: flex; align-items: center; gap: 6px; }
+.image-config select { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); }

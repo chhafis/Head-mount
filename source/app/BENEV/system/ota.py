@@ -49,7 +49,8 @@ HEALTH_TIMEOUT_S = 90
 SYSTEM_FILES = ["/usr/local/lib/benev", "/etc/systemd/system/benev-dashboard.service",
                 "/etc/systemd/system/benev-wifi.service", "/etc/systemd/system/benev-update@.service",
                 "/etc/systemd/system/benev-update.timer", "/etc/sudoers.d/benev-dashboard"]
-APP_STATE = {"media", "calibration.json", "camera.json", "outputs.json", "board.json"}
+APP_STATE = {"media", "calibration.json", "camera.json", "outputs.json", "board.json",
+             "lens-shading.json", "camera-tuning.json"}
 
 
 class UpdateError(Exception):

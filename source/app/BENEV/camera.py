@@ -15,12 +15,20 @@ import threading
 import time
 from pathlib import Path
 
+import image_tuning
+
 HERE = Path(__file__).resolve().parent
 MEDIA = HERE / "media"
 SETTINGS_FILE = HERE / "camera.json"
-DEFAULT_SETTINGS = {"width": 1920, "height": 1080, "fps": 30, "raw": False, "front_axis": "+x"}
+DEFAULT_SETTINGS = {"width": 1920, "height": 1080, "fps": 30, "raw": False, "front_axis": "+x", "image": {}}
 IDLE_STOP_S = 5.0
 START_TIMEOUT_S = 20.0
+# The worker's libcamera uses a copy of the sensor's tuning file (camera-tuning.json) instead of
+# the stock one: the stock file plus the image settings (image_tuning.py: exposure limit,
+# contrast enhancement) plus the lens shading calibration (lens_shading.py), if there is one.
+LENS_FILE = HERE / "lens-shading.json"
+TUNING_BASE = Path("/usr/local/share/libcamera/ipa/rpi/vc4/ar0234.json")
+TUNING_FILE = HERE / "camera-tuning.json"
 # Kurokesu's libcamera 0.7.2 (with AR0234 support) is installed in /usr/local next to the
 # system's 0.5; only the camera worker is pointed at its Python bindings.
 LIBCAMERA_PYTHONPATH = "/usr/local/lib/python3/dist-packages"
@@ -28,6 +36,36 @@ MEDIA_TYPES = {".jpg": "image/jpeg", ".dng": "image/x-adobe-dng",
                ".mp4": "video/mp4", ".mkv": "video/x-matroska"}
 
 log = logging.getLogger("dashboard")
+
+
+def write_tuning(image):
+    """Build camera-tuning.json for the image settings `image` (a full settings dict) and the
+    lens calibration, if any. -> its path."""
+    tuning = json.loads(TUNING_BASE.read_text())
+    image_tuning.apply_to_tuning(tuning, image)
+    try:
+        lens = json.loads(LENS_FILE.read_text())
+    except FileNotFoundError:
+        lens = None
+    if lens:
+        for algo in tuning["algorithms"]:
+            if "rpi.alsc" in algo:
+                algo["rpi.alsc"] = lens["alsc"]
+                break
+        else:
+            tuning["algorithms"].append({"rpi.alsc": lens["alsc"]})
+    tmp = TUNING_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(tuning, indent=1))
+    os.replace(tmp, TUNING_FILE)
+    return TUNING_FILE
+
+
+def lens_status():
+    try:
+        lens = json.loads(LENS_FILE.read_text())
+    except (OSError, ValueError):
+        return {"calibrated": False}
+    return {"calibrated": True, "time": lens.get("time"), "stats": lens.get("stats"), "warnings": lens.get("warnings", [])}
 
 
 def sensor_present():
@@ -61,6 +99,7 @@ class CameraFeed:
         self.error = None
         self.stopping = None      # the worker we told to exit (it may still send a few frames)
         self.closed = False       # set by shutdown(): the service is stopping
+        self.lens = lens_status()
         try:
             self.settings = {**DEFAULT_SETTINGS, **json.loads(SETTINGS_FILE.read_text())}
         except (OSError, ValueError):
@@ -122,6 +161,43 @@ class CameraFeed:
             self.settings.update(changes)
             SETTINGS_FILE.write_text(json.dumps(self.settings))
 
+    def image_settings(self):
+        """The image settings in effect: the defaults plus what is saved in camera.json."""
+        return image_tuning.merged(self.settings.get("image"))
+
+    def set_image(self, changes):
+        """Save changed image settings (None = back to the defaults) and restart the worker."""
+        if changes is None:
+            saved = {}
+        else:
+            saved = {**(self.settings.get("image") or {}), **image_tuning.validate(changes)}
+        self.update_settings(image=saved)
+        self.restart()
+
+    def set_lens(self, data):
+        """Save (or with None remove) the lens calibration and restart the worker with it."""
+        if data is None:
+            LENS_FILE.unlink(missing_ok=True)
+        else:
+            tmp = LENS_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=1))
+            os.replace(tmp, LENS_FILE)
+        self.lens = lens_status()
+        self.restart()
+
+    def restart(self):
+        """End the worker; it comes straight back if someone is using the camera (new tuning)."""
+        with self.cond:
+            proc = self.proc
+            if proc is None or proc is self.stopping or (self.meta and self.meta.get("recording")):
+                return
+            self.state, self.ready, self.stopping = "off", False, proc
+            try:
+                proc.stdin.close()
+            except OSError:
+                proc.terminate()
+            threading.Timer(10, lambda p=proc: p.poll() is None and p.terminate()).start()
+
     def shutdown(self, timeout=20):
         """Service stop: end the worker and wait for it; it finishes a running recording first."""
         with self.cond:
@@ -148,7 +224,8 @@ class CameraFeed:
         with self.cond:
             meta = self.meta if self.state == "live" else None
             return {"present": sensor_present(), "state": self.state, "error": self.error,
-                    "viewers": self.users, "settings": dict(self.settings),
+                    "viewers": self.users, "settings": dict(self.settings), "lens": self.lens,
+                    "image": self.image_settings(), "image_defaults": image_tuning.DEFAULTS,
                     "camera": meta, "recording": meta and meta.get("recording")}
 
     # --- worker process
@@ -156,10 +233,22 @@ class CameraFeed:
     def _start(self):
         self.state, self.error, self.meta, self.ready = "starting", None, None, False
         s = self.settings
+        env = {**os.environ, "PYTHONPATH": LIBCAMERA_PYTHONPATH, "LIBCAMERA_LOG_LEVELS": "*:WARN"}
+        image = self.image_settings()
+        try:
+            tuning = write_tuning(image)
+        except (OSError, ValueError, KeyError) as e:
+            log.warning("image tuning and lens calibration not used: %s", e)
+            tuning = None
+        ctl = image_tuning.controls(image)
+        if tuning:   # not LIBCAMERA_RPI_TUNING_FILE: Picamera2 clears that; the worker passes it on
+            env["BENEV_TUNING_FILE"] = str(tuning)
+        else:        # stock tuning has no custom exposure mode: its short mode is the nearest
+            ctl["AeExposureMode"] = "Short"
+        env["BENEV_IMAGE_CONTROLS"] = json.dumps(ctl)
         self.proc = subprocess.Popen(
             [sys.executable, str(HERE / "camera_worker.py"), str(s["width"]), str(s["height"]), str(s["fps"])],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env={**os.environ, "PYTHONPATH": LIBCAMERA_PYTHONPATH, "LIBCAMERA_LOG_LEVELS": "*:WARN"})
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.log_thread = threading.Thread(target=self._read_log, args=(self.proc,), daemon=True)
         self.log_thread.start()
         threading.Thread(target=self._read_records, args=(self.proc,), daemon=True).start()

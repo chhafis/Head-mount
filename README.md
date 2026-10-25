@@ -233,7 +233,7 @@ priority 20 (they sleep between reads, so they take very little CPU).
 | Fan & LEDs | The automatic outputs with what they are doing and why (fan, power-on, record and battery-low LEDs); the fan's normal speed; LED2 brightness and the spare green LED by hand. |
 | Power & buttons | USB-C power or battery, the shutdown countdown, how long to run on battery before shutting down, the battery-low threshold, and how often each button was pressed (to test them). |
 | Software update | Installed version, the newest release on GitHub, *Check for updates*, *Install*, and *Restart now* when an update changed boot settings. |
-| Camera | Live view, **Take photo**, a plain video **Record / Stop** (video only), resolution and frame rate for both, optional raw DNG with photos, and the list of photos and plain videos. |
+| Camera | Live view, **Take photo**, a plain video **Record / Stop** (video only), resolution and frame rate for both, optional raw DNG with photos, and the list of photos and plain videos. The *Lens shading correction* box calibrates the lens. |
 | Battery | MAX17048: charge %, voltage, charge rate, alert, 1-hour history. |
 | Motion | LSM6DSV16B: accelerometer, gyroscope, roll/pitch, temperature. |
 | Magnetic field | MMC5983MA, offset-corrected X/Y/Z and magnitude. |
@@ -253,6 +253,34 @@ priority 20 (they sleep between reads, so they take very little CPU).
 | 1920×1080 | 30 | crop |
 | 1280×720 | 60 | crop |
 | 960×600 | 100 | full (2×2 binned) |
+
+## Lens shading correction (dark, tinted edges of the 170° lens)
+
+A wide-angle lens lets less light reach the edges, and tints them (pink, green or purple). The
+Pi's image processor can correct this, but it needs a measurement of the specific lens, and the
+stock AR0234 tuning has none. **Calibrate once per lens** on the Device page:
+
+1. Cover the **whole lens** with a white diffuser: 2–3 layers of white printer paper, or the
+   bottom of a white plastic cup. With a 170° view nothing else fills the picture evenly.
+2. Point it at an **even light**: a window with an overcast sky, or a ceiling lamp. Keep it
+   still. Avoid mixing daylight and lamp light.
+3. Press **Calibrate** under *Lens shading correction*. It takes about 10 seconds.
+
+It then shows how much the edges were off, and the live view, photos and recordings are
+corrected from then on. It refuses (and keeps the old correction) if the picture is too dark,
+over-exposed, or not an even white, and says what to fix. *Remove* undoes it.
+
+What it does: averages 8 full-size raw frames, measures brightness and the red/blue balance in a
+16×12 grid, and writes gain tables into a copy of the sensor's tuning file
+(`~/BENEV/camera-tuning.json`; the measurement is in `~/BENEV/lens-shading.json`, both kept by
+updates). The method is the one in Raspberry Pi's tuning tool (`rpi.alsc`), taken from one colour
+temperature. For lighting very different from the calibration (warm lamps vs. daylight) the ISP
+adjusts the colour tables by itself.
+
+Limits:
+- The ISP can lift the edges at most **4×**. If the lens's image circle does not reach the
+  sensor's corners, those stay dark (the app says so). Then crop, or use a lower-resolution mode.
+- It corrects lens shading, not the lens distortion (the fisheye look).
 
 ## LEDs, fan and buttons
 
@@ -452,6 +480,7 @@ tap instead. So they work unchanged inside a WebView.
 |---|---|
 | `~/BENEV/` | app code (`server.py`, `sensors.py`, `motion.py`, `recorder.py`, `board.py`, `outputs.py`, `camera.py`, `camera_worker.py`, `static/`, `system/`, `tools/`), `VERSION` |
 | `~/BENEV/board.json` | fan, battery-LED and shutdown settings (kept by updates) |
+| `~/BENEV/lens-shading.json`, `camera-tuning.json` | lens shading calibration and the tuning file built from it (kept by updates) |
 | `/etc/benev/ota.json` | update source, token, automatic install (root only) |
 | `/var/lib/benev/ota/` | update state, last installer log, backup of the previous version |
 | `/etc/systemd/system/benev-update@.service`, `benev-update.timer`, `/usr/local/lib/benev/ota.py` | the updater |

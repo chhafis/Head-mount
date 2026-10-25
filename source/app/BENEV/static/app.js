@@ -774,8 +774,134 @@ function renderCameraControls() {
   document.getElementById("rec-badge").hidden = !recording;
 }
 
+// ---------- image quality (image_tuning.py)
+
+const IMG_EXPOSURES = [[3, "3 ms: sharpest, noisiest, may flicker"], [4, "4 ms: may flicker"], [6, "6 ms: may flicker"],
+  [8, "8 ms: may flicker"], [10, "10 ms: recommended, no flicker"], [16, "16 ms"], [20, "20 ms (flicker-free, blurrier)"],
+  [33, "33 ms: brightest, blurriest"]];
+const IMG_MAINS = [[50, "50 Hz (India, Europe)"], [60, "60 Hz (Americas)"], [0, "Off"]];
+const IMG_SHARPNESS = [[0, "Off"], [0.5, "Low"], [1, "Normal"], [1.5, "High"], [2, "Very high"]];
+const IMG_METERING = [["matrix", "the whole view"], ["centre-weighted", "the centre"]];
+let imgBusy = false;
+
+function fillSelect(select, options) {
+  if (select.options.length) return;
+  for (const [value, label] of options) {
+    const o = el("option", null, label);
+    o.value = String(value);
+    select.append(o);
+  }
+}
+
+function setSelectNear(select, value) {   // the saved value may lie between two listed ones
+  const near = [...select.options].reduce((best, o) =>
+    (Math.abs(Number(o.value) - value) < Math.abs(Number(best.value) - value) ? o : best), select.options[0]);
+  select.value = Number.isNaN(Number(near.value)) ? String(value) : near.value;
+}
+
+function renderImage(c) {
+  if (!c.image || imgBusy) return;
+  const exp = document.getElementById("img-exposure"), sharp = document.getElementById("img-sharpness"),
+    meter = document.getElementById("img-metering"), ce = document.getElementById("img-ce"),
+    mains = document.getElementById("img-mains");
+  fillSelect(exp, IMG_EXPOSURES);
+  fillSelect(mains, IMG_MAINS);
+  if (document.activeElement !== mains) mains.value = String(c.image.mains_hz);
+  fillSelect(sharp, IMG_SHARPNESS);
+  fillSelect(meter, IMG_METERING);
+  if (document.activeElement !== exp) setSelectNear(exp, c.image.max_exposure_ms);
+  if (document.activeElement !== sharp) setSelectNear(sharp, c.image.sharpness);
+  if (document.activeElement !== meter) meter.value = c.image.metering;
+  if (document.activeElement !== ce) ce.checked = c.image.contrast_enhance;
+  const cam = c.camera && c.camera.config;
+  document.getElementById("img-help").textContent =
+    "A shorter exposure means less motion blur when the head moves; the camera makes up the light with gain, " +
+    "which adds a little noise (denoising is always on). The frame rate is not affected" +
+    (cam ? `: ${cam.width}×${cam.height} at ${cam.fps} fps.` : ".");
+}
+
+async function imageAction(body) {
+  const msg = document.getElementById("img-msg");
+  imgBusy = true;
+  msg.classList.remove("error");
+  msg.textContent = "Applying…";
+  try {
+    const reply = await postJson("/api/camera", body);
+    imgBusy = false;
+    renderImage(reply.status);
+    msg.textContent = "Applied. The camera restarted with the new settings.";
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.classList.add("error");
+  } finally {
+    imgBusy = false;
+  }
+}
+
+for (const [id, key, parse] of [["img-exposure", "max_exposure_ms", Number], ["img-sharpness", "sharpness", Number],
+  ["img-metering", "metering", String], ["img-mains", "mains_hz", Number]]) {
+  document.getElementById(id).addEventListener("change", (ev) => imageAction({ action: "image", [key]: parse(ev.target.value) }));
+}
+document.getElementById("img-ce").addEventListener("change", (ev) => imageAction({ action: "image", contrast_enhance: ev.target.checked }));
+document.getElementById("img-reset").addEventListener("click", () => imageAction({ action: "image_reset" }));
+
+// ---------- lens shading correction (lens_shading.py)
+
+let lensBusy = false;
+
+function lensSummary(st) {
+  return `edges were up to ${fmt(st.red_shift_pct, 0)} % off in red and ${fmt(st.blue_shift_pct, 0)} % in blue, ` +
+    `corners at ${fmt(st.corner_brightness_pct, 0)} % of the centre's brightness`;
+}
+
+function renderLens(lens) {
+  if (!lens || lensBusy) return;
+  const when = lens.time ? new Date(lens.time.replace(/([+-]\d\d)(\d\d)$/, "$1:$2")) : null;
+  document.getElementById("lens-status").textContent = lens.calibrated
+    ? `Calibrated${when && !isNaN(when) ? ` ${when.toLocaleString()}` : ""}: ${lensSummary(lens.stats)}, now corrected.`
+    : "Not calibrated: the edges of the picture are darker and tinted.";
+  document.getElementById("lens-reset").hidden = !lens.calibrated;
+  document.getElementById("lens-calibrate").textContent = lens.calibrated ? "Calibrate again" : "Calibrate";
+}
+
+async function lensAction(action) {
+  const msg = document.getElementById("lens-msg");
+  const buttons = [document.getElementById("lens-calibrate"), document.getElementById("lens-reset")];
+  lensBusy = true;
+  buttons.forEach((b) => { b.disabled = true; });
+  msg.classList.remove("error");
+  msg.textContent = action === "lens_calibrate" ? "Measuring… keep the diffuser over the lens." : "Removing…";
+  try {
+    const reply = await postJson("/api/camera", { action });
+    const r = reply.result;
+    if (r.problems) {
+      msg.textContent = `Not saved: ${r.problems.join(" ")}`;
+      msg.classList.add("error");
+    } else if (r.saved) {
+      msg.textContent = `Saved: ${lensSummary(r.stats)}. ${(r.warnings || []).join(" ")}`;
+    } else {
+      msg.textContent = "Removed: the camera is back to no lens shading correction.";
+    }
+    lensBusy = false;
+    renderLens(reply.status.lens);
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.classList.add("error");
+  } finally {
+    lensBusy = false;
+    buttons.forEach((b) => { b.disabled = false; });
+  }
+}
+
+document.getElementById("lens-calibrate").addEventListener("click", () => lensAction("lens_calibrate"));
+document.getElementById("lens-reset").addEventListener("click", (ev) => {
+  if (secondTap(ev.currentTarget, "Tap again to remove")) lensAction("lens_reset");
+});
+
 function updateCamera(c) {
   camStatus = c;
+  renderLens(c.lens);
+  renderImage(c);
   const box = document.getElementById("cam-status");
   const state = !c.present || c.state === "error" ? "error" : c.state === "live" ? "ok" : "wait";
   if (box.dataset.state !== state) box.dataset.state = state;
