@@ -1,0 +1,4 @@
+# Everything runs on the Pi: keep LF line endings even when edited on Windows.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

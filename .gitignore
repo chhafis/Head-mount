@@ -1,0 +1,8 @@
+# Built by source/build.sh (and attached to GitHub releases)
+/benev-install.sh
+/benev-install.sh.sha256
+/benev-install.sh.sig
+__pycache__/
+*.pyc
+# Signing keys must never be committed (see README, "Updates")
+*ota-key*

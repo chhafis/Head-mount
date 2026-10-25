@@ -1,0 +1,14 @@
+[Unit]
+Description=Benev Wi-Fi manager (saved Wi-Fi, otherwise the setup hotspot)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/benev/wifi_manager.py
+RuntimeDirectory=benev-wifi
+RuntimeDirectoryMode=0755
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

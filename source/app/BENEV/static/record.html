@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a1a19">
+<title>Benev recorder</title>
+<link rel="stylesheet" href="/style.css">
+<script>
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body class="viz-root record-page">
+<header class="topbar">
+  <div>
+    <h1>Benev</h1>
+    <nav class="tabs" aria-label="Pages">
+      <a href="/" aria-current="page">Record</a><a href="/device">Device</a><a href="/wifi">Wi-Fi</a>
+    </nav>
+  </div>
+  <div class="chips" id="chips" aria-live="polite"></div>
+</header>
+
+<main>
+  <section class="card rec-card" aria-labelledby="rec-h">
+    <h2 id="rec-h" class="visually-hidden">Recording</h2>
+    <div class="rec-timer" id="rec-timer" aria-live="off">00:00:00</div>
+    <button class="rec-button" id="rec-button" type="button" aria-pressed="false">
+      <span class="rec-icon" aria-hidden="true"></span><span class="rec-label">Start recording</span>
+    </button>
+    <p class="rec-meta" id="rec-meta"></p>
+    <p class="camera-msg" id="rec-msg" role="status"></p>
+    <div class="live">
+      <figure class="cube-figure">
+        <div class="scene" id="live-scene"></div>
+        <figcaption>
+          <span id="ori-text">Waiting for the IMU</span>
+          <span class="badge" id="heading-badge"></span>
+        </figcaption>
+        <div class="cube-controls">
+          <button type="button" id="tare">Set forward</button>
+          <button type="button" id="untare">North up</button>
+          <label>Camera faces
+            <select id="front-axis">
+              <option value="+x">IMU +X</option><option value="-x">IMU −X</option>
+              <option value="+y">IMU +Y</option><option value="-y">IMU −Y</option>
+              <option value="+z">IMU +Z</option><option value="-z">IMU −Z</option>
+            </select>
+          </label>
+        </div>
+      </figure>
+      <figure class="preview-figure">
+        <div class="camera-frame">
+          <img id="preview" alt="Camera preview" hidden>
+          <div class="camera-placeholder" id="preview-placeholder">Camera preview is off</div>
+          <div class="rec-badge" id="rec-badge" hidden><span class="rec-dot" aria-hidden="true"></span>REC</div>
+        </div>
+        <button type="button" id="preview-toggle" aria-pressed="false">Show camera</button>
+      </figure>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="cal-h">
+    <div class="card-head">
+      <h2 id="cal-h">Calibration</h2>
+      <span class="muted" id="cal-summary"></span>
+    </div>
+    <button type="button" class="wide-button" id="cal-button">Calibrate IMU &amp; magnetometer</button>
+    <div class="wizard" id="wizard" hidden>
+      <ol class="wizard-steps" id="wizard-steps">
+        <li data-step="still">Put the head mount down and keep it still</li>
+        <li data-step="camera">The camera starts (its current affects the magnetometer)</li>
+        <li data-step="rotate">Pick it up and slowly turn it in every direction: tilt, roll, turn around, upside down</li>
+        <li data-step="compute">Computing</li>
+      </ol>
+      <p class="wizard-message" id="wizard-message" role="status"></p>
+      <div class="meter" aria-hidden="true"><div class="meter-fill" id="wizard-progress"></div></div>
+      <p class="muted" id="wizard-coverage"></p>
+      <button type="button" id="wizard-cancel">Cancel</button>
+    </div>
+    <div class="cal-result" id="cal-result" hidden></div>
+  </section>
+
+  <section class="card" aria-labelledby="sessions-h">
+    <div class="card-head">
+      <h2 id="sessions-h">Recordings</h2>
+      <span class="muted" id="disk-free"></span>
+    </div>
+    <ul class="sessions" id="sessions"></ul>
+  </section>
+
+  <section class="card player" id="player" aria-labelledby="player-h" hidden>
+    <div class="card-head">
+      <h2 id="player-h">Playback</h2>
+      <button type="button" id="player-close">Close</button>
+    </div>
+    <div class="player-body">
+      <video id="player-video" controls playsinline preload="metadata"></video>
+      <figure class="cube-figure">
+        <div class="scene" id="player-scene"></div>
+        <figcaption id="player-text"></figcaption>
+      </figure>
+    </div>
+    <p class="muted" id="player-info"></p>
+  </section>
+</main>
+
+<script src="/cube.js"></script>
+<script src="/record.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Installed to /etc/avahi/services/benev.service. Apps find the recorder with DNS-SD
+     (Android NsdManager): look for _benev._tcp, or _http._tcp named after the host. -->
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service>
+    <type>_benev._tcp</type>
+    <port>80</port>
+    <txt-record>path=/</txt-record>
+    <txt-record>api=/api</txt-record>
+  </service>
+  <service>
+    <type>_http._tcp</type>
+    <port>80</port>
+    <txt-record>path=/</txt-record>
+  </service>
+</service-group>

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a1a19">
+<title>Benev Wi-Fi</title>
+<link rel="stylesheet" href="/style.css">
+<script>
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body class="viz-root wifi-page">
+<header class="topbar">
+  <div>
+    <h1>Benev</h1>
+    <nav class="tabs" aria-label="Pages">
+      <a href="/">Record</a><a href="/device">Device</a><a href="/wifi" aria-current="page">Wi-Fi</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="card" aria-labelledby="conn-h">
+    <div class="card-head">
+      <h2 id="conn-h">Connection</h2>
+      <div class="dev-status" id="wifi-state" data-state="wait">
+        <span class="status-icon" aria-hidden="true"></span><span class="status-text">Checking</span>
+      </div>
+    </div>
+    <p class="wifi-detail" id="wifi-detail"></p>
+    <p class="wifi-address" id="wifi-address"></p>
+    <div class="wifi-switch" id="wifi-switch" role="status" hidden></div>
+    <p class="camera-msg" id="wifi-msg" role="status"></p>
+    <div class="wifi-actions">
+      <button id="rejoin-btn" type="button" hidden>Use saved Wi-Fi</button>
+      <button id="hotspot-btn" type="button" hidden>Turn on the hotspot</button>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="nets-h">
+    <div class="card-head">
+      <h2 id="nets-h">Wi-Fi networks</h2>
+      <div class="controls">
+        <span class="muted" id="scan-age"></span>
+        <button id="scan-btn" type="button">Scan again</button>
+      </div>
+    </div>
+    <p class="muted wifi-hint">Tap a network to connect. Benev remembers it and joins it by itself next time it is in range.</p>
+    <ul class="networks" id="networks"></ul>
+  </section>
+</main>
+
+<script src="/wifi.js"></script>
+</body>
+</html>

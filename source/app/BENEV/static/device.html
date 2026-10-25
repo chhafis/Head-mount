@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BENEV sensors</title>
+<link rel="stylesheet" href="/style.css">
+<script>
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body class="viz-root">
+<header class="topbar">
+  <div>
+    <h1>Benev device</h1>
+    <nav class="tabs" aria-label="Pages">
+      <a href="/">Record</a><a href="/device" aria-current="page">Device</a><a href="/wifi">Wi-Fi</a>
+    </nav>
+    <p class="sub">Raspberry Pi Zero 2 W &middot; <span id="host"></span></p>
+  </div>
+  <div class="controls">
+    <span id="conn" class="status-pill" data-state="wait">
+      <span class="status-icon" aria-hidden="true"></span><span class="status-text">Connecting</span>
+    </span>
+    <span id="rate" class="muted"></span>
+    <button id="pause" type="button" aria-pressed="false">Pause charts</button>
+    <button id="theme" type="button">Dark theme</button>
+    <button id="reboot" type="button">Restart Pi</button>
+    <button id="shutdown" type="button" class="danger">Shut down Pi</button>
+  </div>
+</header>
+
+<div class="notice" id="shutdown-notice" role="alert" hidden>
+  <span class="status-icon" aria-hidden="true"></span>
+  <div>
+    <strong id="shutdown-title">The Pi is shutting down.</strong>
+    <span id="shutdown-detail"></span>
+    Wait until the power-on LED goes off (about 20 seconds) before removing power.
+  </div>
+</div>
+
+<main>
+  <section class="card" aria-labelledby="outputs-h">
+    <div class="card-head">
+      <h2 id="outputs-h">Fan &amp; LEDs <span class="chip">GPIO high = on (AO3400A low-side switches)</span></h2>
+      <div class="outputs-note muted" id="outputs-note"></div>
+    </div>
+    <div class="outputs" id="outputs"></div>
+  </section>
+
+  <section class="card" aria-labelledby="power-h">
+    <div class="card-head">
+      <h2 id="power-h">Power &amp; buttons <span class="chip">BQ24074 PGOOD · GPIO6</span></h2>
+      <div class="dev-status" id="power-status" data-state="wait">
+        <span class="status-icon" aria-hidden="true"></span><span class="status-text">Checking</span>
+      </div>
+    </div>
+    <p class="power-detail" id="power-detail"></p>
+    <div class="power-settings">
+      <label>Shut down after running on battery for
+        <select id="unplug-select">
+          <option value="60">1 minute</option><option value="120">2 minutes</option>
+          <option value="300">5 minutes</option><option value="600">10 minutes</option>
+          <option value="1800">30 minutes</option><option value="0">Never</option>
+        </select>
+      </label>
+      <label>Battery-low LED below
+        <select id="battery-low-select">
+          <option value="10">10 %</option><option value="15">15 %</option><option value="20">20 %</option>
+          <option value="25">25 %</option><option value="30">30 %</option>
+        </select>
+      </label>
+    </div>
+    <p class="muted power-buttons" id="power-buttons"></p>
+    <p class="camera-msg" id="power-msg" role="status"></p>
+  </section>
+
+  <section class="card" aria-labelledby="update-h">
+    <div class="card-head">
+      <h2 id="update-h">Software update <span class="chip">GitHub Releases</span></h2>
+      <div class="dev-status" id="update-status" data-state="wait">
+        <span class="status-icon" aria-hidden="true"></span><span class="status-text">Checking</span>
+      </div>
+    </div>
+    <p id="update-summary"></p>
+    <p class="update-message" id="update-message" role="status"></p>
+    <details class="update-notes" id="update-notes" hidden><summary id="update-notes-title">Release notes</summary><pre id="update-notes-text"></pre></details>
+    <div class="update-actions">
+      <button id="update-check" type="button">Check for updates</button>
+      <button id="update-install" type="button" class="primary" hidden>Install</button>
+      <button id="update-reboot" type="button" hidden>Restart now</button>
+    </div>
+    <pre class="update-log" id="update-log" hidden></pre>
+  </section>
+
+  <section class="card" aria-labelledby="camera-h">
+    <div class="card-head">
+      <h2 id="camera-h">Camera <span class="chip">AR0234 global shutter · libcamera + Pi ISP</span></h2>
+      <div class="dev-status" id="cam-status" data-state="wait">
+        <span class="status-icon" aria-hidden="true"></span><span class="status-text">Checking</span><span class="detail"></span>
+      </div>
+    </div>
+    <div class="camera">
+      <div class="camera-frame">
+        <img id="cam-img" alt="Live view from the AR0234 camera" hidden>
+        <div class="camera-placeholder" id="cam-placeholder">Live view is off</div>
+        <div class="rec-badge" id="rec-badge" hidden><span class="rec-dot" aria-hidden="true"></span>REC <span id="rec-time">0:00</span></div>
+      </div>
+      <div class="camera-side">
+        <button id="cam-toggle" type="button" aria-pressed="false">Start live view</button>
+        <div class="camera-actions">
+          <button id="cam-photo" type="button">Take photo</button>
+          <button id="cam-record" type="button" class="record-button" aria-pressed="false">Record</button>
+        </div>
+        <p class="camera-msg" id="cam-msg" role="status"></p>
+        <fieldset class="camera-config">
+          <legend>Camera mode</legend>
+          <label>Resolution <select id="cam-res"></select></label>
+          <label>Frame rate <select id="cam-fps-select"></select></label>
+          <button id="cam-apply" type="button">Apply</button>
+          <label class="check"><input type="checkbox" id="cam-raw"> Also save raw DNG with photos</label>
+        </fieldset>
+        <dl class="camera-stats">
+          <div><dt>Mode</dt><dd id="cam-mode">–</dd></div>
+          <div><dt>Frame rate</dt><dd id="cam-fps">–</dd></div>
+          <div><dt>Exposure</dt><dd id="cam-exp">–</dd></div>
+          <div><dt>Gain</dt><dd id="cam-gain">–</dd></div>
+          <div><dt>White balance</dt><dd id="cam-wb">–</dd></div>
+        </dl>
+        <p class="camera-note">Photos: full 1920×1200 sensor readout, high-quality denoise, JPEG q95 (+ DNG). Video: hardware H.264 High profile up to 25 Mb/s for 1080p and below; MJPEG at 1920×1200. Frame rates are limited to what records without dropped frames. The camera runs only while in use, and while it does the magnetometer reads about 19 µT off (mostly Z).</p>
+      </div>
+    </div>
+    <div class="captures">
+      <div class="captures-head">
+        <h3>Photos &amp; recordings</h3>
+        <span class="muted" id="media-free"></span>
+      </div>
+      <div class="table-wrap captures-wrap">
+        <table>
+          <thead><tr><th>File</th><th>Size</th><th>Taken</th><th></th></tr></thead>
+          <tbody id="media-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="battery-h">
+    <div class="card-head">
+      <h2 id="battery-h">Battery <span class="chip">MAX17048 fuel gauge</span></h2>
+      <div class="dev-status" data-dev="battery"></div>
+    </div>
+    <div class="battery-top">
+      <div class="hero">
+        <div class="tile-label">State of charge</div>
+        <div class="hero-value" id="soc">&ndash;</div>
+        <div class="meter" id="soc-meter" role="meter" aria-label="State of charge" aria-valuemin="0" aria-valuemax="100">
+          <div class="meter-fill"></div>
+        </div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="tile-label">Cell voltage</div><div class="tile-value" id="bat-v">&ndash;</div></div>
+        <div class="tile"><div class="tile-label">Charge rate</div><div class="tile-value" id="bat-rate">&ndash;</div><div class="tile-note" id="bat-dir"></div></div>
+        <div class="tile"><div class="tile-label">Low-charge alert</div><div class="tile-value" id="bat-alert">&ndash;</div><div class="tile-note" id="bat-thr"></div></div>
+        <div class="tile"><div class="tile-label">Gauge flags</div><div class="tile-value small" id="bat-flags">&ndash;</div></div>
+      </div>
+    </div>
+    <div class="charts">
+      <figure class="chart" data-chart="voltage"></figure>
+      <figure class="chart" data-chart="soc"></figure>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="imu-h">
+    <div class="card-head">
+      <h2 id="imu-h">Motion <span class="chip">LSM6DSV16B IMU</span></h2>
+      <div class="dev-status" data-dev="imu"></div>
+    </div>
+    <div class="tiles row">
+      <div class="tile"><div class="tile-label">Acceleration magnitude</div><div class="tile-value" id="imu-norm">&ndash;</div></div>
+      <div class="tile"><div class="tile-label">Roll</div><div class="tile-value" id="imu-roll">&ndash;</div></div>
+      <div class="tile"><div class="tile-label">Pitch</div><div class="tile-value" id="imu-pitch">&ndash;</div></div>
+      <div class="tile"><div class="tile-label">IMU temperature</div><div class="tile-value" id="imu-temp">&ndash;</div></div>
+    </div>
+    <div class="charts">
+      <figure class="chart" data-chart="accel"></figure>
+      <figure class="chart" data-chart="gyro"></figure>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="mag-h">
+    <div class="card-head">
+      <h2 id="mag-h">Magnetic field <span class="chip">MMC5983MA magnetometer</span></h2>
+      <div class="dev-status" data-dev="mag"></div>
+    </div>
+    <div class="tiles row">
+      <div class="tile"><div class="tile-label">Field magnitude</div><div class="tile-value" id="mag-norm">&ndash;</div></div>
+      <div class="tile"><div class="tile-label">Magnetometer temperature</div><div class="tile-value" id="mag-temp">&ndash;</div></div>
+      <div class="tile"><div class="tile-label">Bridge offset (removed)</div><div class="tile-value small" id="mag-offset">&ndash;</div></div>
+    </div>
+    <div class="charts">
+      <figure class="chart wide" data-chart="mag"></figure>
+    </div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

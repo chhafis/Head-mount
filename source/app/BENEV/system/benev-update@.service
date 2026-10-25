@@ -1,0 +1,11 @@
+[Unit]
+Description=Benev software update (%i)
+Documentation=file:///usr/local/lib/benev/ota.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/benev/ota.py %i
+TimeoutStartSec=75min
+Nice=5

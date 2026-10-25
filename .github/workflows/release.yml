@@ -1,0 +1,49 @@
+# Pushing a tag vX.Y.Z publishes a release that head mounts install over the air:
+#   git tag v1.0.0 && git push origin v1.0.0
+# The release carries benev-install.sh (the full installer: also usable on a fresh Pi), its
+# SHA-256, and a signature when the OTA_SIGNING_KEY secret is set (see README, "Updates").
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Tags must look like v1.2.3"; exit 1; }
+
+      - name: Build the installer
+        env:
+          BENEV_VERSION: ${{ github.ref_name }}
+          BENEV_OTA_REPO: ${{ github.repository }}
+        run: bash source/build.sh
+
+      - name: Checksum
+        run: sha256sum benev-install.sh > benev-install.sh.sha256
+
+      - name: Sign
+        if: env.OTA_SIGNING_KEY != ''
+        run: |
+          umask 077
+          printf '%s\n' "$OTA_SIGNING_KEY" > "$RUNNER_TEMP/ota_key"
+          ssh-keygen -Y sign -f "$RUNNER_TEMP/ota_key" -n benev-ota benev-install.sh
+          rm -f "$RUNNER_TEMP/ota_key"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="benev-install.sh benev-install.sh.sha256"
+          if [ -f benev-install.sh.sig ]; then files="$files benev-install.sh.sig"; fi
+          gh release create "$GITHUB_REF_NAME" $files --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
