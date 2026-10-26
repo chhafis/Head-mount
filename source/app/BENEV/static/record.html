@@ -61,6 +61,11 @@
           <output id="ev-value" for="ev-slider">±0.0</output>
           <button type="button" id="ev-reset" title="Back to the automatic level">Reset</button>
         </label>
+        <label class="ev-row edge-row">Edge brightening
+          <input type="range" id="edge-slider" min="0" max="100" step="5" value="0" disabled aria-describedby="edge-value">
+          <output id="edge-value" for="edge-slider">Off</output>
+        </label>
+        <p class="muted edge-hint" id="edge-hint"></p>
       </figure>
     </div>
   </section>

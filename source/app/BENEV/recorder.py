@@ -121,6 +121,18 @@ class SessionManager:
             self.camera.release()
             raise
 
+    @staticmethod
+    def _save_edge_map(folder):
+        """Copy the lens's edge gain map into the session: tools/edge_boost_video.py needs it."""
+        try:
+            lens = json.loads((Path(__file__).resolve().parent / "lens-shading.json").read_text())
+            grid = lens.get("edge_gain")
+            if grid:
+                (folder / "edge_gain.json").write_text(json.dumps(
+                    {"grid": grid, "frame": [1920, 1200], "note": "extra gain after the ISP lens correction; see README"}))
+        except (OSError, ValueError):
+            pass
+
     def _start_logging(self):
         """Called with the lock held and the camera streaming."""
         sid = time.strftime("%Y%m%d-%H%M%S")
@@ -150,6 +162,8 @@ class SessionManager:
             shutil.rmtree(folder, ignore_errors=True)
             raise
         meta["camera"] = (self.camera.status().get("camera") or {}).get("config")
+        meta["image"] = self.camera.image_settings()   # exposure limit, brightness, edge brightening, ...
+        self._save_edge_map(folder)
         meta["camera_front_axis"] = self.camera.settings.get("front_axis", "+x")   # which IMU axis the lens looks along
         meta["video_file"] = video["file"]
         self.active = {"id": sid, "folder": folder, "log": lg, "t0": time.monotonic(), "meta": meta,

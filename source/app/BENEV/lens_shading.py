@@ -147,6 +147,31 @@ def compute_alsc(planes, black_levels, colour_temp, luminance_strength=DEFAULT_S
     return alsc, stats
 
 
+EDGE_GRID = (20, 32)         # rows, columns of the edge gain map (60 px cells on a 1920x1200 frame)
+EDGE_MAX_GAIN = 8.0          # most extra gain the edge map asks for
+EDGE_NO_LIGHT = 0.04         # below this share of the white level there is no picture to brighten
+
+
+def edge_gain_grid(y):
+    """Extra gain still needed after the ISP's lens shading correction, from a flat-field luma
+    picture (2-D array, the ISP's output, with the correction active). -> (rows, cols) gains >= 1.
+
+    Each cell is brought up to the level of the middle of the picture, at most EDGE_MAX_GAIN.
+    Where a cell is nearly black (below EDGE_NO_LIGHT of the white level) the lens delivers no
+    light, so the gain fades back to 1 there: amplifying it would only show noise."""
+    y = np.asarray(y, dtype=np.float64)
+    h, w = y.shape
+    rows, cols = EDGE_GRID
+    plateau = float(np.percentile(y[h // 4:3 * h // 4, w // 4:3 * w // 4], 60))
+    if plateau < 10:
+        raise ValueError("the picture is too dark to measure")
+    cells = y[: h // rows * rows, : w // cols * cols].reshape(rows, h // rows, cols, w // cols).mean(axis=(1, 3))
+    rel = _median3(_median3(cells)) / plateau
+    gain = np.clip(1 / np.maximum(rel, 1e-3), 1.0, EDGE_MAX_GAIN)
+    fade = np.clip((rel - EDGE_NO_LIGHT) / EDGE_NO_LIGHT, 0.0, 1.0)
+    return np.round(1 + (gain - 1) * fade, 3)
+
+
 UNEVEN_PROBLEM_PCT = 20.0    # a patch this far from its surroundings: not a plain cover (thresholds: see tests)
 UNEVEN_WARNING_PCT = 10.0
 

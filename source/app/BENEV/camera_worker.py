@@ -9,7 +9,7 @@ server.py runs this as a child process while the camera is in use. It owns the c
 
 argv:   width height fps
 stdin:  one JSON command per line: {"id": n, "cmd": "still" | "record_start" | "record_stop"
-        | "configure" | "shading_capture" | "live", ...}
+        | "configure" | "shading_capture" | "edge_map" | "edge_reload" | "live", ...}
 stdout: records <u32 meta length><u32 JPEG length><meta JSON><JPEG>. Preview frames carry the
         current status; command replies and events carry an empty JPEG.
 """
@@ -22,10 +22,14 @@ import threading
 import time
 from pathlib import Path
 
-from picamera2 import Picamera2
+import numpy as np
+from picamera2 import MappedArray, Picamera2
 from picamera2.encoders import H264Encoder, MJPEGEncoder
 from picamera2.outputs import Output, PyavOutput
-from libcamera import Transform, controls
+from libcamera import ColorSpace, Transform, controls
+
+import edge_boost
+import lens_shading
 
 MEDIA = Path(__file__).resolve().parent / "media"
 PREVIEW_WIDTH = 640
@@ -37,6 +41,7 @@ H264_MAX = (1920, 1080)         # largest frame the VideoCore H.264 encoder acce
 RECORD_MAX_FPS = {(1920, 1200): 25, (1920, 1080): 30, (1280, 720): 60, (960, 600): 100}
 JPEG_QUALITY = 95
 SHADING_FRAMES = 8              # raw frames averaged for the lens shading calibration
+LENS_FILE = Path(__file__).resolve().parent / "lens-shading.json"
 
 
 def image_controls():
@@ -144,6 +149,22 @@ class CameraService:
         self.recording = None
         self.config = None
         self.live_controls = {}           # changed while running (brightness); kept across configure()
+        # Edge brightening (edge_boost.py): extra per-pixel gain on top of the ISP's lens shading
+        self.edge_strength = float(os.environ.get("BENEV_EDGE_BOOST") or 0)
+        self.edge_grid = self._load_edge_grid()
+        self.boost = None                 # {"main": (maps, size), "lores": (maps, size)} or None
+        self.boost_paused = False         # during stills and measurements, which use other pictures
+        self.boost_error = None
+        self._edge_lock = threading.Lock()
+        self._edge_thread = None
+        self._edge_dirty = self._edge_rebuild = False
+        self._edge_ln = {}                # stream name -> edge_boost.LogGain
+        self._edge_sizes = {}
+        self._edge_crop = (0, 0) + edge_boost.FULL_FRAME
+        self.limited_range = True
+        self.mode_info = {}
+        self.edge_avg_ms = self.edge_peak_ms = 0.0
+        self.picam2.pre_callback = self._boost_frame
         self.configure(width, height, fps)
 
     # --- configuration
@@ -177,12 +198,19 @@ class CameraService:
         if self.picam2.started:
             self.picam2.stop()
         self.picam2.configure(cfg)
+        self.mode_info = next((m for m in self.picam2.sensor_modes
+                               if tuple(m["size"]) == tuple(mode[0]) and m["bit_depth"] == mode[2]), {})
+        try:
+            self.limited_range = self.picam2.camera_config["colour_space"].range != ColorSpace.Range.Full
+        except (KeyError, AttributeError):
+            self.limited_range = True
         self.picam2.start()
         self.config = {"width": size[0], "height": size[1], "fps": round(fps, 2),
                        "sensor_mode": f"{mode[0][0]}x{mode[0][1]} {mode[2]}-bit",
                        "record_codec": "h264" if size[0] <= H264_MAX[0] and size[1] <= H264_MAX[1] else "mjpeg"}
         self.preview.every = max(1, round(fps / PREVIEW_FPS))
         self._start_preview()
+        self._build_boost()
         log(f"configured {self.config}")
 
     def _start_preview(self):
@@ -193,6 +221,121 @@ class CameraService:
         if self.preview_encoder is not None:
             self.picam2.stop_encoder(self.preview_encoder)
             self.preview_encoder = None
+
+    # --- edge brightening
+
+    @staticmethod
+    def _load_edge_grid():
+        try:
+            grid = json.loads(LENS_FILE.read_text()).get("edge_gain")
+            return np.array(grid, dtype=np.float32) if grid else None
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _build_boost(self):
+        """New picture sizes (or a new map): drop the old gain maps and make new ones in the background."""
+        self.boost = None
+        with self._edge_lock:
+            # Only the small preview picture: brightening the full 1080p video frame costs 35-40 ms per
+            # frame in the running camera (measured), more than the 33 ms a 30 fps frame has.
+            self._edge_sizes = {"lores": tuple(self.picam2.camera_config["lores"]["size"])}
+            self._edge_crop = self.mode_info.get("crop_limits") or (0, 0) + edge_boost.FULL_FRAME
+        self._schedule_boost(rebuild=True)
+
+    def _schedule_boost(self, rebuild=False):
+        """Make the gain maps for the current strength on a thread of their own: compiling the
+        helper and building the maps take seconds, and the frame loop must not wait for them. It
+        keeps using the previous maps (or none) until the new ones are swapped in."""
+        with self._edge_lock:
+            self._edge_dirty = True
+            self._edge_rebuild = self._edge_rebuild or rebuild
+            if self._edge_thread is not None and self._edge_thread.is_alive():
+                return
+            self._edge_thread = threading.Thread(target=self._edge_job, daemon=True, name="edge-maps")
+            self._edge_thread.start()
+
+    def _edge_job(self):
+        while True:
+            with self._edge_lock:
+                if not self._edge_dirty:
+                    return
+                self._edge_dirty = False
+                rebuild, self._edge_rebuild = self._edge_rebuild, False
+                strength, grid, sizes, crop = self.edge_strength, self.edge_grid, dict(self._edge_sizes), self._edge_crop
+            try:
+                if strength <= 0 or grid is None:
+                    self.boost, self.boost_error = None, None
+                    continue
+                if edge_boost.load() is None:
+                    self.boost, self.boost_error = None, edge_boost.last_error
+                    continue
+                if rebuild or set(self._edge_ln) != set(sizes):
+                    self._edge_ln = {name: edge_boost.build_log_gain(grid, crop, size) for name, size in sizes.items()}
+                boost = {}
+                for name, size in sizes.items():
+                    maps = edge_boost.maps_for(self._edge_ln[name], strength)
+                    if maps is not None:
+                        boost[name] = (maps, size)
+                self.boost, self.boost_error = boost or None, None
+                if boost:
+                    log("edge brightening on: strength %.0f %%, up to x%.1f" % (
+                        100 * strength, max(m.max_gain for m, _ in boost.values())))
+            except Exception as e:
+                self.boost, self.boost_error = None, f"{type(e).__name__}: {e}"
+                log(f"edge brightening failed: {self.boost_error}")
+
+    def _boost_frame(self, request):
+        """Runs before the encoders see a frame: brighten the edges of the preview picture (not the video)."""
+        boost = self.boost
+        if boost is None or self.boost_paused:
+            return
+        t0 = time.perf_counter()
+        try:
+            for name, (maps, size) in boost.items():
+                with MappedArray(request, name) as m:
+                    edge_boost.apply(maps, m.array, size, m.array.shape[1], self.limited_range)
+        except Exception as e:   # never let the frame loop die over a cosmetic filter
+            self.boost, self.boost_error = None, f"{type(e).__name__}: {e}"
+            log(f"edge brightening stopped: {self.boost_error}")
+            return
+        ms = (time.perf_counter() - t0) * 1000
+        self.edge_avg_ms += 0.05 * (ms - self.edge_avg_ms)
+        self.edge_peak_ms = max(ms, self.edge_peak_ms * 0.995)
+
+    def edge_map(self):
+        """With the lens shading correction active, measure what is still dark in a flat field
+        (the white cover) and return the extra gain map (lens_shading.edge_gain_grid)."""
+        if self.recording:
+            raise RuntimeError("stop the recording first")
+        cfg = self.picam2.create_still_configuration(
+            main={"size": self.full_size, "format": "YUV420"}, transform=TRANSFORM, buffer_count=2,
+            controls=image_controls())
+        self.boost_paused = True
+        self._stop_preview()
+        self.picam2.stop()
+        acc = None
+        try:
+            self.picam2.configure(cfg)
+            self.picam2.start()
+            for _ in range(20):   # let exposure and white balance settle on the flat field
+                self.picam2.capture_metadata()
+            w, h = self.full_size
+            for _ in range(SHADING_FRAMES):
+                y = self.picam2.capture_array("main")[:h, :w].astype(np.float32)
+                acc = y if acc is None else acc + y
+        finally:
+            self.boost_paused = False
+            c = self.config
+            self.configure(c["width"], c["height"], c["fps"])   # back to video; the preview restarts
+        grid = lens_shading.edge_gain_grid(acc / SHADING_FRAMES)
+        return {"grid": grid.tolist(), "max_gain": float(grid.max()),
+                "boosted_pct": round(float((grid > 1.1).mean() * 100), 1)}
+
+    def reload_edge(self):
+        """The map in lens-shading.json changed (a new calibration): use it."""
+        self.edge_grid = self._load_edge_grid()
+        self._schedule_boost(rebuild=True)
+        return {"map": self.edge_grid is not None}
 
     # --- status
 
@@ -221,6 +364,9 @@ class CameraService:
             "colour_temp": md.get("ColourTemperature"),
             "lux": round(md["Lux"]) if "Lux" in md else None,
             "config": self.config,
+            "edge": {"strength": self.edge_strength, "map": self.edge_grid is not None, "active": self.boost is not None,
+                     "max_gain": round(max(m.max_gain for m, _ in self.boost.values()), 1) if self.boost else None,
+                     "ms_avg": round(self.edge_avg_ms, 1), "ms_peak": round(self.edge_peak_ms, 1), "error": self.boost_error},
             "modes": [{"size": list(m[0]), "fps": m[1], "bit_depth": m[2]} for m in self.modes],
             "recording": None if rec is None else {"file": rec["file"], "codec": rec["codec"],
                                                    "seconds": round(time.monotonic() - rec["t0"], 1)},
@@ -231,12 +377,18 @@ class CameraService:
     LIVE_CONTROLS = ("ExposureValue",)
 
     def set_live(self, wanted):
-        """Change ISP controls while the camera runs: no restart, no dropped frames."""
+        """Change ISP controls (and the edge brightening strength) while the camera runs: no restart."""
         changes = {k: float(v) for k, v in wanted.items() if k in self.LIVE_CONTROLS}
-        if not changes:
+        if "EdgeBoost" in wanted:
+            self.edge_strength = min(1.0, max(0.0, float(wanted["EdgeBoost"])))
+            self._schedule_boost()      # in the background; this returns at once
+            changes["EdgeBoost"] = self.edge_strength
+        elif not changes:
             raise ValueError("nothing to change")
-        self.live_controls.update(changes)
-        self.picam2.set_controls(changes)
+        isp = {k: v for k, v in changes.items() if k in self.LIVE_CONTROLS}
+        if isp:
+            self.live_controls.update(isp)
+            self.picam2.set_controls(isp)
         return changes
 
     def record_start(self, folder=None):
@@ -292,11 +444,14 @@ class CameraService:
                 main={"size": self.full_size, "format": "BGR888"}, raw={"size": self.full_size},
                 transform=TRANSFORM, buffer_count=2, controls={**image_controls(), **self.live_controls})
             self._stop_preview()
+            self.boost_paused = True    # these pictures are not the video's size or format
             try:
                 request = self.picam2.switch_mode_and_capture_request(cfg, delay=2)
             finally:
+                self.boost_paused = False
                 self._start_preview()
             size = self.full_size
+            self._boost_still(request, size)
         try:
             if self.recording:
                 save_yuv420_jpeg(request.make_array("main"), size, MEDIA / files[0])
@@ -309,6 +464,16 @@ class CameraService:
         log(f"saved {', '.join(files)} at {size[0]}x{size[1]}")
         return {"files": files, "size": list(size)}
 
+    def _boost_still(self, request, size):
+        """Edge brightening for a full-size BGR888 photo, like the video gets."""
+        if self.edge_strength <= 0 or self.edge_grid is None or edge_boost.load() is None:
+            return
+        maps = edge_boost.build_maps(self.edge_grid, self.edge_strength, (0, 0) + tuple(self.full_size), size)
+        if maps is None:
+            return
+        with MappedArray(request, "main") as m:
+            edge_boost.apply_rgb(maps, m.array, size)
+
     def shading_capture(self):
         """Average raw flat-field frames at full sensor size -> lens shading tables (lens_shading.py).
         Full size so the tables cover the whole sensor; libcamera crops them for smaller modes."""
@@ -319,6 +484,7 @@ class CameraService:
         cfg = self.picam2.create_still_configuration(
             main={"size": (640, 400), "format": "YUV420"}, raw={"size": self.full_size},
             transform=TRANSFORM, buffer_count=2)
+        self.boost_paused = True
         self._stop_preview()
         self.picam2.stop()
         acc, mds = None, []
@@ -338,6 +504,7 @@ class CameraService:
                     request.release()
                 acc = img.astype(np.float32) if acc is None else acc + img
         finally:
+            self.boost_paused = False
             c = self.config
             self.configure(c["width"], c["height"], c["fps"])   # back to video, preview restarts
         mean = acc / len(mds)
@@ -395,6 +562,10 @@ def main():
                     reply["result"] = service.shading_capture()
                 elif name == "live":
                     reply["result"] = service.set_live(cmd["controls"])
+                elif name == "edge_map":
+                    reply["result"] = service.edge_map()
+                elif name == "edge_reload":
+                    reply["result"] = service.reload_edge()
                 elif name == "configure":
                     if service.recording:
                         raise RuntimeError("stop the recording before changing resolution or frame rate")

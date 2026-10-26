@@ -30,8 +30,9 @@ DEFAULTS = {
     "metering": "matrix",       # centre-weighted | matrix | spot
     "highlight_protect": False, # also keep bright areas (windows, lamps) from clipping
     "contrast_enhance": True,   # the ISP's adaptive contrast enhancement
+    "edge_boost": 0.0,          # extra gain for edges the lens leaves dark (edge_boost.py); 0 = off
 }
-RANGES = {"max_exposure_ms": (1.0, 33.0), "max_gain": (1.0, 16.0), "sharpness": (0.0, 4.0),
+RANGES = {"max_exposure_ms": (1.0, 33.0), "max_gain": (1.0, 16.0), "sharpness": (0.0, 4.0), "edge_boost": (0.0, 1.0),
           "contrast": (0.5, 2.0), "saturation": (0.0, 2.0), "ev": (-2.0, 2.0)}
 CHOICES = {"metering": ("centre-weighted", "matrix", "spot"), "mains_hz": (0, 50, 60)}
 BOOLEANS = ("highlight_protect", "contrast_enhance")

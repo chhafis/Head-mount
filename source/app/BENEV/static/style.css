@@ -496,3 +496,5 @@ button:disabled { opacity: 0.55; cursor: default; }
 .name-suffix { color: var(--text-secondary); }
 .name-help { font-size: 13px; }
 .name-help code { font-size: 12px; }
+.edge-row { grid-template-columns: auto 1fr auto; }
+.edge-hint { font-size: 12px; margin: 0; }

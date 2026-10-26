@@ -218,6 +218,49 @@ function renderBrightness() {
   $("ev-value").textContent = fmtEv(img.ev);
 }
 
+// ---------- edge brightening: extra gain for the edges the lens leaves dark
+
+let edgeDragging = false, edgeTimer = null, edgePending = null;
+
+const edgeText = (v) => (v <= 0 ? "Off" : `${Math.round(v * 100)} %`);
+
+function sendEdge(v) {
+  if (edgeTimer) { edgePending = v; return; }
+  post("/api/camera", { action: "edge_boost", strength: v }).catch((e) => message(e.message, true));
+  edgeTimer = setTimeout(() => {
+    edgeTimer = null;
+    if (edgePending != null) { const next = edgePending; edgePending = null; sendEdge(next); }
+  }, 250);
+}
+
+$("edge-slider").addEventListener("pointerdown", () => { edgeDragging = true; });
+for (const ev of ["pointerup", "pointercancel", "blur"]) $("edge-slider").addEventListener(ev, () => { edgeDragging = false; });
+$("edge-slider").addEventListener("input", (e) => {
+  const v = Number(e.target.value) / 100;
+  $("edge-value").textContent = edgeText(v);
+  sendEdge(v);
+});
+
+function renderEdge() {
+  const cam = last.camera;
+  if (!cam || !cam.image) return;
+  const lens = cam.lens || {}, live = (cam.camera && cam.camera.edge) || {};
+  const usable = Boolean(lens.edge_map) && cam.edge_available !== false;
+  $("edge-slider").disabled = !usable;
+  if (!edgeDragging && !edgeTimer) {
+    $("edge-slider").value = String(Math.round(cam.image.edge_boost * 100));
+    $("edge-value").textContent = edgeText(cam.image.edge_boost);
+  }
+  let hint = "";
+  if (!lens.calibrated) hint = "Calibrate this camera's lens first (card below): that measures where the picture is still dark.";
+  else if (!lens.edge_map) hint = "Calibrate the lens again to measure the dark edges.";
+  else if (cam.edge_available === false) hint = "This needs the C compiler (gcc) on the head mount.";
+  else if (live.error) hint = live.error;
+  else if (live.active) hint = `Dark edges are brightened by up to ×${live.max_gain} (${live.ms_avg} ms per frame). Parts the lens does not light stay black. The setting is saved with each recording.`;
+  else hint = "Brightens the dark edges and corners of the picture, in the preview and photos (the recorded video is not changed; see the README). Off by default.";
+  $("edge-hint").textContent = hint;
+}
+
 let lensBusy = false;
 
 function renderLens() {
@@ -436,6 +479,7 @@ function onMessage(msg) {
   renderRecording();
   renderCalibration();
   renderBrightness();
+  renderEdge();
   renderLens();
 }
 

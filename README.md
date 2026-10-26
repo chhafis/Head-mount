@@ -299,6 +299,28 @@ Limits:
   made for the sensor's 1/2.6" size or bigger), or centring the lens, is the real fix.
 - It corrects lens shading, not the lens distortion (the fisheye look).
 
+### Edge brightening (a digital filter on top)
+
+Beyond the ISP's 4× limit, the **Edge brightening** slider (Record page and Device page) multiplies
+the dark parts by a further gain, up to 8×. The calibration measures that gain (it takes a second
+picture of the white cover with the ISP correction on and stores a 20×32 map as `edge_gain` in
+`lens-shading.json`), so it is specific to each head mount and lens. Colour saturation is
+reduced where the gain is large, because the noise is amplified too. It is off by default.
+
+- It is applied to the **live preview and to photos**. The **recorded video is not changed**:
+  the Pi Zero 2 W needs 35–40 ms per 1080p frame for this (measured), more than the 33 ms a 30 fps
+  frame has, so doing it while recording would drop frames, and 1920×1080 at 30 fps comes first.
+- Every recording saves the map as `edge_gain.json` in its folder. To brighten a recording
+  afterwards, on a PC with `pip install av numpy pillow`:
+  `python tools/edge_boost_video.py <recording folder>` writes `video_edge.mp4` next to the video
+  (same frames, same timing; `--strength 0.5` for less). Copy `edge_boost.py`, `edge_boost.c`
+  and `tools/` from `~/BENEV` together.
+- Where the lens gives no light at all (the top corners of one lens tested here), the map fades
+  out instead of amplifying noise, so those corners stay black. Only a lens whose image circle
+  covers the sensor, or cropping, fixes that.
+- It needs `gcc` on the Pi (the installer builds a small routine, `libedgeboost.so`, with it).
+  Without it the slider reports that edge brightening is unavailable.
+
 ## LEDs, fan and buttons
 
 | Part | Pin | Behaviour |

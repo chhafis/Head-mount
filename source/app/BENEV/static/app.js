@@ -784,6 +784,22 @@ const IMG_SHARPNESS = [[0, "Off"], [0.5, "Low"], [1, "Normal"], [1.5, "High"], [
 const IMG_METERING = [["matrix", "the whole view"], ["centre-weighted", "the centre"]];
 let imgBusy = false;
 let evDragging = false, evTimer = null, evPending = null;
+let edgeDragging = false, edgeTimer = null, edgePending = null;
+
+const edgeText = (v) => (v <= 0 ? "Off" : `${Math.round(v * 100)} %`);
+
+function sendEdge(v) {   // live: the camera does not restart
+  if (edgeTimer) { edgePending = v; return; }
+  postJson("/api/camera", { action: "edge_boost", strength: v }).catch((e) => {
+    const m = document.getElementById("img-msg");
+    m.textContent = e.message;
+    m.classList.add("error");
+  });
+  edgeTimer = setTimeout(() => {
+    edgeTimer = null;
+    if (edgePending != null) { const next = edgePending; edgePending = null; sendEdge(next); }
+  }, 250);
+}
 
 function fmtEv(v) {
   return `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(1)}`;
@@ -835,6 +851,20 @@ function renderImage(c) {
     document.getElementById("img-ev").value = String(c.image.ev);
     document.getElementById("img-ev-value").textContent = fmtEv(c.image.ev);
   }
+  const lens = c.lens || {}, live = (c.camera && c.camera.edge) || {};
+  const edge = document.getElementById("img-edge");
+  edge.disabled = !(lens.edge_map && c.edge_available !== false);
+  if (!edgeDragging && !edgeTimer) {
+    edge.value = String(Math.round(c.image.edge_boost * 100));
+    document.getElementById("img-edge-value").textContent = edgeText(c.image.edge_boost);
+  }
+  document.getElementById("img-edge-hint").textContent = !lens.calibrated
+    ? "Edge brightening needs the lens calibration below: it measures where the picture is still dark."
+    : !lens.edge_map ? "Calibrate the lens again to measure the dark edges."
+    : c.edge_available === false ? "Edge brightening needs the C compiler (gcc) on the head mount."
+    : live.error ? live.error
+    : live.active ? `Dark edges are brightened by up to ×${live.max_gain} (${live.ms_avg} ms per frame). Parts the lens does not light stay black.`
+    : "Brightens the dark edges and corners of the picture (preview and photos; recorded video is not changed, see the README). Off by default.";
   const cam = c.camera && c.camera.config;
   document.getElementById("img-help").textContent =
     "A shorter exposure means less motion blur when the head moves; the camera makes up the light with gain, " +
@@ -864,6 +894,14 @@ for (const [id, key, parse] of [["img-exposure", "max_exposure_ms", Number], ["i
   ["img-metering", "metering", String], ["img-mains", "mains_hz", Number]]) {
   document.getElementById(id).addEventListener("change", (ev) => imageAction({ action: "image", [key]: parse(ev.target.value) }));
 }
+const edgeSlider = document.getElementById("img-edge");
+edgeSlider.addEventListener("pointerdown", () => { edgeDragging = true; });
+for (const ev of ["pointerup", "pointercancel", "blur"]) edgeSlider.addEventListener(ev, () => { edgeDragging = false; });
+edgeSlider.addEventListener("input", (e) => {
+  const v = Number(e.target.value) / 100;
+  document.getElementById("img-edge-value").textContent = edgeText(v);
+  sendEdge(v);
+});
 const evSlider = document.getElementById("img-ev");
 evSlider.addEventListener("pointerdown", () => { evDragging = true; });
 for (const ev of ["pointerup", "pointercancel", "blur"]) evSlider.addEventListener(ev, () => { evDragging = false; });

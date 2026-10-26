@@ -14,7 +14,8 @@ the folder format. POST endpoints take JSON:
   /api/outputs      {"name", "level": 0-100}           (manual outputs only)
   /api/board        {"fan_normal_pct", "fan_full_c", "fan_back_c", "battery_low_pct", "unplug_shutdown_s"}
   /api/camera       {"action": "still" | "record_start" | "record_stop" | "configure" | "settings"
-                     | "lens_calibrate" | "lens_reset" | "image" | "image_reset" | "brightness", ...}
+                     | "lens_calibrate" | "lens_reset" | "image" | "image_reset" | "brightness"
+                     | "edge_boost", ...}
   /api/system       {"action": "shutdown" | "reboot"}
   /api/update       {"action": "check" | "install"}       (GET: state of the GitHub updater)
   /api/device       {"name"}  rename the head mount (name.local)   (GET: {"name", "address", "version"})
@@ -625,10 +626,22 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 camera.set_lens({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "stats": measured["stats"],
                                  "warnings": warnings, "alsc": measured["alsc"]})
+                edge = None
+                try:   # what is still dark with the correction on: the map for edge brightening
+                    em = camera.command({"cmd": "edge_map"}, timeout=120)
+                    camera.set_edge_gain(em["grid"])
+                    edge = {"max_gain": round(em["max_gain"], 1), "boosted_pct": em["boosted_pct"]}
+                except (CameraError, OSError, KeyError, ValueError) as e:
+                    warnings.append(f"The map for edge brightening could not be measured ({e}); "
+                                    "the lens correction itself is saved.")
                 result = {"saved": True, "warnings": warnings, "stats": measured["stats"],
-                          "grids": measured.get("grids")}
+                          "grids": measured.get("grids"), "edge": edge}
         elif action == "brightness":   # live, also while recording: nothing restarts
             result = {"ev": camera.set_brightness(body["ev"])}
+        elif action == "edge_boost":   # live; the gain map comes from the lens calibration
+            if self.app.recording():       # building the maps takes CPU; keep a recording undisturbed
+                raise RuntimeError("stop the recording before changing edge brightening")
+            result = {"strength": camera.set_edge_boost(body["strength"])}
         elif action in ("image", "image_reset"):
             if self.app.recording():
                 raise RuntimeError("stop the recording first")

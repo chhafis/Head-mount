@@ -15,6 +15,7 @@ import threading
 import time
 from pathlib import Path
 
+import edge_boost
 import image_tuning
 
 HERE = Path(__file__).resolve().parent
@@ -65,7 +66,9 @@ def lens_status():
         lens = json.loads(LENS_FILE.read_text())
     except (OSError, ValueError):
         return {"calibrated": False}
-    return {"calibrated": True, "time": lens.get("time"), "stats": lens.get("stats"), "warnings": lens.get("warnings", [])}
+    return {"calibrated": True, "time": lens.get("time"), "stats": lens.get("stats"), "warnings": lens.get("warnings", []),
+            "edge_map": bool(lens.get("edge_gain")),
+            "edge_max_gain": max(max(row) for row in lens["edge_gain"]) if lens.get("edge_gain") else None}
 
 
 def sensor_present():
@@ -187,6 +190,29 @@ class CameraFeed:
                 log.warning("brightness not applied live: %s", e)
         return ev
 
+    def set_edge_boost(self, strength):
+        """Edge brightening strength 0..1. Saved, and applied at once if the camera runs."""
+        strength = image_tuning.validate({"edge_boost": strength})["edge_boost"]
+        self.update_settings(image={**(self.settings.get("image") or {}), "edge_boost": strength})
+        with self.cond:
+            running = self.ready and self.proc is not None and self.proc is not self.stopping
+        if running:
+            try:
+                self.command({"cmd": "live", "controls": {"EdgeBoost": strength}}, timeout=20)
+            except CameraError as e:
+                log.warning("edge brightening not applied live: %s", e)
+        return strength
+
+    def set_edge_gain(self, grid):
+        """Store the edge gain map next to the lens calibration and make the running camera use it."""
+        lens = json.loads(LENS_FILE.read_text())
+        lens["edge_gain"] = grid
+        tmp = LENS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(lens, indent=1))
+        os.replace(tmp, LENS_FILE)
+        self.lens = lens_status()
+        self.command({"cmd": "edge_reload"}, timeout=30)
+
     def set_lens(self, data):
         """Save (or with None remove) the lens calibration and restart the worker with it."""
         if data is None:
@@ -239,6 +265,7 @@ class CameraFeed:
             return {"present": sensor_present(), "state": self.state, "error": self.error,
                     "viewers": self.users, "settings": dict(self.settings), "lens": self.lens,
                     "image": self.image_settings(), "image_defaults": image_tuning.DEFAULTS,
+                    "edge_available": edge_boost.can_build(),
                     "camera": meta, "recording": meta and meta.get("recording")}
 
     # --- worker process
@@ -265,6 +292,7 @@ class CameraFeed:
         else:        # stock tuning has no custom exposure mode: its short mode is the nearest
             ctl["AeExposureMode"] = "Short"
         env["BENEV_IMAGE_CONTROLS"] = json.dumps(ctl)
+        env["BENEV_EDGE_BOOST"] = str(image["edge_boost"])
         self.proc = subprocess.Popen(
             [sys.executable, str(HERE / "camera_worker.py"), str(s["width"]), str(s["height"]), str(s["fps"])],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)

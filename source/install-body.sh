@@ -136,6 +136,11 @@ install_app() {
     # Copies code only; photos, recordings and settings (camera.json, outputs.json) are kept.
     cp -r "$PAYLOAD/BENEV/." "$APP_DIR/"
     chown -R "$TARGET_USER:$TARGET_USER" "$APP_DIR"
+    # Edge brightening runs a small compiled routine; build it now so the camera never waits for gcc.
+    if command -v gcc >/dev/null 2>&1; then
+        runuser -u "$TARGET_USER" -- env PYTHONPATH="$APP_DIR" python3 -c "import edge_boost; edge_boost.load()" \
+            || echo "Note: could not build the edge brightening routine (the feature stays off)."
+    fi
     echo "Dashboard version: $(cat "$APP_DIR/VERSION" 2>/dev/null || echo unknown)"
 }
 
