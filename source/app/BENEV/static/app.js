@@ -761,8 +761,9 @@ camApply.addEventListener("click", async () => {
 
 camRaw.addEventListener("change", () => camCommand({ action: "settings", raw: camRaw.checked }));
 camRotate.addEventListener("change", async () => {
-  await camCommand({ action: "settings", rotate180: camRotate.checked }, "Turning the picture, the camera restarts…");
-  camMessage(camRotate.checked ? "Picture rotated by 180°. Calibrate the lens again if you had done so in the other orientation." : "Picture back to normal orientation.");
+  const camera2 = camRotate.value === "2";
+  await camCommand({ action: "settings", rotate180: camera2 }, "Switching camera, it restarts…");
+  camMessage(`Camera ${camera2 ? 2 : 1} selected (picture ${camera2 ? "rotated by 180°" : "in standard orientation"}).`);
 });
 
 function renderCameraControls() {
@@ -998,7 +999,7 @@ function updateCamera(c) {
   }
   if (s) {
     camRaw.checked = Boolean(s.raw);
-    camRotate.checked = Boolean(s.rotate180);
+    camRotate.value = s.rotate180 ? "2" : "1";
   }
 
   const m = c.camera;

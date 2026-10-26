@@ -238,7 +238,7 @@ priority 20 (they sleep between reads, so they take very little CPU).
 | Fan & LEDs | The automatic outputs with what they are doing and why (fan, power-on, record and battery-low LEDs); the fan's normal speed; LED2 brightness and the spare green LED by hand. |
 | Power & buttons | USB-C power or battery, the shutdown countdown, how long to run on battery before shutting down, the battery-low threshold, and how often each button was pressed (to test them). |
 | Software update | Installed version, the newest release on GitHub, *Check for updates*, *Install*, and *Restart now* when an update changed boot settings. |
-| Camera | Live view, **Take photo**, a plain video **Record / Stop** (video only), resolution and frame rate for both, optional raw DNG with photos, **Rotate the picture by 180°** for a camera mounted upside down (the lens and edge calibrations follow the orientation; the setting is saved with every recording), and the list of photos and plain videos. The *Lens shading correction* box calibrates the lens. |
+| Camera | Live view, **Take photo**, a plain video **Record / Stop** (video only), resolution and frame rate for both, optional raw DNG with photos, the **Camera** selector: *Camera 1* is the standard orientation and *Camera 2* turns the picture by 180° (the lens and edge calibrations follow the orientation; the setting is saved with every recording), and the list of photos and plain videos. The *Lens shading correction* box calibrates the lens. |
 | Battery | MAX17048: charge %, voltage, charge rate, alert, 1-hour history. |
 | Motion | LSM6DSV16B: accelerometer, gyroscope, roll/pitch, temperature. |
 | Magnetic field | MMC5983MA, offset-corrected X/Y/Z and magnitude. |
