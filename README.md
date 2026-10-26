@@ -301,6 +301,13 @@ colour tables itself.
   picture. With a lens whose image circle covers the sensor (1/2.6" format or larger for the
   AR0234) this share is close to zero. For lenses that fall short, see *Edge brightening* below.
 - The correction addresses shading, not lens distortion (the fisheye projection).
+- **Lens centring (mechanical vignetting).** If the lens holder sits off-centre over the sensor,
+  one side of the sensor is lit well and the opposite side receives little or no light, and no
+  software can recover it. The calibration measures where the lit area is centred and, when it is
+  100 px or more from the sensor centre, reports the offset in pixels and millimetres (the
+  AR0234's pixels are 3 µm). Loosen the lens holder, re-centre it, and calibrate again. A lens
+  whose chief ray angle suits the sensor, and a clear light path (no hood, filter or barrel
+  clipping the view), reduce the remaining vignetting.
 
 ### Edge brightening
 

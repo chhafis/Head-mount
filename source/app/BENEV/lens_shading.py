@@ -140,6 +140,7 @@ def compute_alsc(planes, black_levels, colour_temp, luminance_strength=DEFAULT_S
         # Share of the picture that needs more than the ISP's 4x brightening: it stays dark.
         "dark_area_pct": round(float((lum > MAX_GAIN).mean() * 100), 1),
         "unevenness_pct": unevenness_pct(g),
+        "lit_centre_offset_px": lit_centre_offset(g),
     }
     # The measured grids, for checking a calibration by hand (not saved with the correction)
     stats["_grids"] = {"green": np.round(g, 1).tolist(), "red_over_green": np.round(rg, 3).tolist(),
@@ -176,7 +177,25 @@ UNEVEN_PROBLEM_PCT = 20.0    # a patch this far from its surroundings: not a pla
 UNEVEN_WARNING_PCT = 10.0
 
 
-def assess(stats):
+PIXEL_UM = 3.0               # AR0234 pixel pitch
+OFFCENTRE_PX = 100           # the lit area this far from the sensor centre is worth mentioning
+
+
+def lit_centre_offset(g):
+    """Where the lens's lit area is centred, relative to the sensor centre, in pixels of the 1920x1200
+    frame: [dx, dy] (positive = right / down). A lens centred on the sensor gives about [0, 0]; a lens
+    holder that sits to one side lights one side of the sensor more and clips the other."""
+    rows, cols = g.shape
+    w = np.clip(g / g.max() - 0.5, 0, None)          # cells brighter than half of the brightest
+    if w.sum() <= 0:
+        return [0, 0]
+    ys, xs = np.mgrid[0:rows, 0:cols]
+    dx = (w * (xs + 0.5)).sum() / w.sum() / cols * 1920 - 960
+    dy = (w * (ys + 0.5)).sum() / w.sum() / rows * 1200 - 600
+    return [int(round(dx)), int(round(dy))]
+
+
+def assess(stats, rotated=False):
     """-> (problems that make the measurement unusable, warnings). Thresholds from synthetic
     tests: a smooth fall-off fits within ~3 %, one bright cell in view shows as ~20 %."""
     problems, warnings = [], []
@@ -196,6 +215,18 @@ def assess(stats):
                         f"{stats['corner_brightness_pct']} % of the centre's brightness) is darker than the image "
                         "processor can lift (limit 4×), so it stays dark. The lens does not cover the whole sensor: "
                         "crop the picture or use a lens with a larger image circle.")
+    dx, dy = stats.get("lit_centre_offset_px") or (0, 0)
+    if stats["dark_area_pct"] >= 1 and max(abs(dx), abs(dy)) >= OFFCENTRE_PX:
+        mm = max(abs(dx), abs(dy)) * PIXEL_UM / 1000
+        if rotated:   # which way is "down" depends on how the picture is turned: say only how far
+            where = ""
+        else:
+            side = [name for name, v in (("right", dx), ("left", -dx), ("bottom", dy), ("top", -dy)) if v >= OFFCENTRE_PX]
+            where = f" towards the {' and '.join(side)} of the picture" if side else ""
+        warnings.append(f"The lens is not centred on the sensor: the lit area is centred {abs(dx)} px sideways and "
+                        f"{abs(dy)} px up/down from the sensor centre (about {mm:.1f} mm){where}. This is mechanical "
+                        "vignetting. Loosen the lens holder and re-centre it (a centred lens lights the corners much "
+                        "better), then calibrate again.")
     return problems, warnings
 
 

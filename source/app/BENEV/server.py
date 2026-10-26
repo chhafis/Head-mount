@@ -623,7 +623,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.app.recording():
                 raise RuntimeError("stop the recording first")
             measured = camera.command({"cmd": "shading_capture"}, timeout=120)
-            problems, warnings = lens_shading.assess(measured["stats"])
+            problems, warnings = lens_shading.assess(measured["stats"], bool(camera.settings.get("rotate180")))
             if problems:   # nothing saved: the old correction (if any) stays
                 result = {"saved": False, "problems": problems, "stats": measured["stats"],
                           "grids": measured.get("grids")}
