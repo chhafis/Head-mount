@@ -149,12 +149,13 @@ From top to bottom:
   camera). It turns as you turn the head mount: tilt and roll from the IMU, heading from
   the gyroscope and the magnetometer. *Set forward* makes the current direction "straight
   ahead". *North up* shows it relative to magnetic north instead. *Camera faces* says which IMU axis the
-  lens looks along (+X on the first board; this is saved with every recording).
-- **Show camera**: optional live preview, with a **Brightness** slider under it (−2 to +2 stops;
-  *Reset* returns to the automatic level). It acts at once, with no restart, and is saved.
+  lens looks along (+X by default; this is saved with every recording).
+- **Show camera**: optional live preview, with a **Brightness** slider (−2 to +2 stops; *Reset*
+  returns to the automatic level) and an **Edge brightening** slider. Changes take effect
+  immediately, without a restart, and are saved.
 - **Calibrate IMU & magnetometer**: see below.
 - **Camera lens**: calibrates this head mount's lens against dark, tinted edges (see
-  [Lens shading correction](#lens-shading-correction-dark-tinted-edges-of-the-170-lens)).
+  [Lens shading correction](#lens-shading-correction)).
 - **Recordings**: every session with its length, size, frames and IMU rate.
   *Play* shows the video with the cube moving as recorded. *Download* gives a zip of the
   whole folder. *Delete* removes it (tap twice).
@@ -220,8 +221,8 @@ line up by timestamp directly. To find the IMU data for a frame, look up its `t_
 time. Sensor logging starts just before the first frame and stops after the last, so every
 frame has IMU data on both sides.
 
-Measured on the first board: IMU 952.9 Hz, no FIFO overruns, and video frames to
-`frames.csv` agreeing within 0.04 ms. In a 2-minute recording with the live preview and
+Typical results: IMU 952.9 Hz, no FIFO overruns, and video frames matching
+`frames.csv` within 0.04 ms. In a 2-minute recording with the live preview and
 playback downloads running at the same time (worst case), 2 of 115,000 IMU samples were missing
 (largest gap 2.1 ms), shown as `ts_jump` in `session.json`. Without that extra load, none.
 
@@ -258,68 +259,71 @@ priority 20 (they sleep between reads, so they take very little CPU).
 | 1280×720 | 60 | crop |
 | 960×600 | 100 | full (2×2 binned) |
 
-## Lens shading correction (dark, tinted edges of the 170° lens)
+## Lens shading correction
 
-A wide-angle lens lets less light reach the edges, and tints them (pink, green or purple). The
-Pi's image processor can correct this, but it needs a measurement of the specific lens, and the
-stock AR0234 tuning has none. **Calibrate once per lens** on the Device page:
+A wide-angle lens delivers less light to the edges of the sensor and shifts their colour (pink,
+green or purple). The Raspberry Pi image processor (ISP) can compensate, but it needs a
+measurement of the specific lens. The stock AR0234 tuning contains none, so each head mount is
+calibrated once on the Device page.
 
-1. Cover the **whole lens** with a white diffuser: 2–3 layers of white printer paper, or the
-   bottom of a white plastic cup. With a 170° view nothing else fills the picture evenly.
-2. Point it at an **even light**: a window with an overcast sky, or a ceiling lamp. Keep it
-   still. Avoid mixing daylight and lamp light. **Do not let a lamp show through as a bright
-   spot**: use more layers of paper, or lay the paper on a laptop or tablet screen showing
-   pure white and press the lens against it. A bright spot makes the calibration refuse
-   ("not an even white") or leaves a dark patch in the middle of the picture.
+**Procedure**
+
+1. Cover the whole lens with a white diffuser, for example two to three layers of white printer
+   paper, or the base of a white plastic cup.
+2. Point the head mount at an even, steady light source, such as an overcast window or a ceiling
+   lamp, and keep it still. Avoid mixing daylight and artificial light. The light source must not
+   appear as a bright spot through the diffuser: add layers of paper, or hold the diffuser against a
+   screen showing pure white. A bright spot causes the calibration to be rejected or leaves a dark
+   patch in the centre of the picture.
 3. Press **Calibrate** under *Lens shading correction* on the Device page, or **Calibrate this
-   camera's lens** in the *Camera lens* card on the Record page. It takes about 15 seconds.
+   camera's lens** in the *Camera lens* card on the Record page. The measurement takes about
+   15 seconds.
 
-**Every head mount needs its own calibration**: each camera and lens has its own dark area.
-The result is stored only on that head mount (`~/BENEV/lens-shading.json`). It is not part
-of the installer or of updates, which keep it, and it is excluded from git.
+Each camera and lens combination has its own vignetting pattern, so **every head mount is
+calibrated individually**. The result is stored on the head mount only
+(`~/BENEV/lens-shading.json`), is preserved by updates, and is excluded from version control.
 
-It then shows how much the edges were off, and the live view, photos and recordings are
-corrected from then on. It refuses (and keeps the old correction) if the picture is too dark,
-over-exposed, or not an even white, and says what to fix. *Remove* undoes it.
+After calibration the page reports how uneven the picture was, and the preview, photos and
+recordings are corrected. A calibration is rejected, and the previous one kept, if the scene is too
+dark, over-exposed or not an even white; the message states what to correct. *Remove* reverts to
+the uncorrected picture.
 
-What it does: averages 8 full-size raw frames, measures brightness and the red/blue balance in a
-16×12 grid, and writes gain tables into a copy of the sensor's tuning file
-(`~/BENEV/camera-tuning.json`; the measurement is in `~/BENEV/lens-shading.json`, both kept by
-updates). The method is the one in Raspberry Pi's tuning tool (`rpi.alsc`), taken from one colour
-temperature. For lighting very different from the calibration (warm lamps vs. daylight) the ISP
-adjusts the colour tables by itself.
+**Method.** The calibration averages 8 full-size raw frames, measures brightness and the
+red/blue balance on a 16×12 grid, and writes gain tables into a copy of the sensor's tuning file
+(`~/BENEV/camera-tuning.json`). This follows the method of Raspberry Pi's tuning tool
+(`rpi.alsc`), for a single colour temperature; under very different lighting the ISP adjusts the
+colour tables itself.
 
-Limits:
-- The ISP can lift the edges at most **4×**. If the lens's image circle does not reach the
-  sensor's corners, those stay dark, and the app tells you how much of the picture that is.
-  With a lens that covers the sensor, this is near 0 %. One 170° lens tested here lit only a
-  circle about 1760 px across (the sensor is 1920×1200, 2264 px corner to corner) and sat
-  about 80 px off-centre, so 38 % of the picture could not be lifted. Cropping to the evenly
-  lit part would keep only about 62 % of the width, so a lens with a larger image circle (one
-  made for the sensor's 1/2.6" size or bigger), or centring the lens, is the real fix.
-- It corrects lens shading, not the lens distortion (the fisheye look).
+**Limits**
 
-### Edge brightening (a digital filter on top)
+- The ISP can raise the edges by a factor of 4 at most. If the lens's image circle does not reach
+  the corners of the sensor, those areas remain darker, and the page reports their share of the
+  picture. With a lens whose image circle covers the sensor (1/2.6" format or larger for the
+  AR0234) this share is close to zero. For lenses that fall short, see *Edge brightening* below.
+- The correction addresses shading, not lens distortion (the fisheye projection).
 
-Beyond the ISP's 4× limit, the **Edge brightening** slider (Record page and Device page) multiplies
-the dark parts by a further gain, up to 8×. The calibration measures that gain (it takes a second
-picture of the white cover with the ISP correction on and stores a 20×32 map as `edge_gain` in
-`lens-shading.json`), so it is specific to each head mount and lens. Colour saturation is
-reduced where the gain is large, because the noise is amplified too. It is off by default.
+### Edge brightening
 
-- It is applied to the **live preview and to photos**. The **recorded video is not changed**:
-  the Pi Zero 2 W needs 35–40 ms per 1080p frame for this (measured), more than the 33 ms a 30 fps
-  frame has, so doing it while recording would drop frames, and 1920×1080 at 30 fps comes first.
-- Every recording saves the map as `edge_gain.json` in its folder. To brighten a recording
-  afterwards, on a PC with `pip install av numpy pillow`:
-  `python tools/edge_boost_video.py <recording folder>` writes `video_edge.mp4` next to the video
-  (same frames, same timing; `--strength 0.5` for less). Copy `edge_boost.py`, `edge_boost.c`
-  and `tools/` from `~/BENEV` together.
-- Where the lens gives no light at all (the top corners of one lens tested here), the map fades
-  out instead of amplifying noise, so those corners stay black. Only a lens whose image circle
-  covers the sensor, or cropping, fixes that.
-- It needs `gcc` on the Pi (the installer builds a small routine, `libedgeboost.so`, with it).
-  Without it the slider reports that edge brightening is unavailable.
+For lenses whose image circle is smaller than the sensor, the **Edge brightening** slider (Record
+and Device pages) applies a further digital gain of up to 8× to the dark areas. During lens
+calibration the head mount measures the remaining shading with the ISP correction active and stores
+it as a 20×32 gain map (`edge_gain` in `lens-shading.json`), so the map is specific to each lens.
+Colour saturation is reduced where the gain is high, because noise is amplified with it. The
+feature is off by default.
+
+- **Scope.** Edge brightening applies to the live preview and to photos. Recorded video is not
+  modified: processing a 1080p frame takes 35–40 ms on the Raspberry Pi Zero 2 W, which exceeds
+  the 33 ms available per frame at 30 fps, and 1920×1080 at 30 fps takes priority.
+- **Brightening recorded video.** Every recording stores the map as `edge_gain.json` in its
+  folder. On a PC with `pip install av numpy pillow`, run
+  `python tools/edge_boost_video.py <recording folder>` to write `video_edge.mp4` beside the
+  original, with identical frames and timing (`--strength 0.5` applies half the gain). The files
+  `edge_boost.py`, `edge_boost.c` and the `tools` folder from `~/BENEV` are required.
+- **Areas that receive no light.** Where the lens delivers essentially no light, the gain fades out
+  rather than amplifying noise, so those areas remain black. Only a lens with a larger image
+  circle, or cropping the picture, resolves this.
+- **Requirement.** The installer compiles a small routine (`libedgeboost.so`) with `gcc`. If it is
+  unavailable the slider reports that edge brightening is not available.
 
 ## LEDs, fan and buttons
 
@@ -330,7 +334,7 @@ reduced where the gain is large, because the noise is amplified too. It is off b
 | Battery-low LED (BAT_LOW_R) | GPIO16 | On below 15 % battery (off again above 18 %). **Blinks slowly while running on battery** and counting down to the automatic shutdown. |
 | Fan (FAN_CTRL) | GPIO12 | 50 % from start-up. **Full speed from 60 °C** CPU temperature, back to normal at 52 °C. Set the normal speed with the fan slider on the Device page. |
 | Record button (SW1, CAM_REC) | GPIO4 | Press: start a recording. Press again: stop and save it. Presses within 1 s of the last one are ignored. |
-| Power button (SW2) | GPIO22 | Short press while on: save any recording and shut down. Needs the LTC2954 (U13), which is **not fitted on the first board**. |
+| Power button (SW2) | GPIO22 | Short press while on: save any recording and shut down. Requires the LTC2954 (U13), an optional part that is not fitted on every board. |
 
 The LED colours are whatever is fitted on D8/D9; the names come from the schematic. The
 thresholds are in `~/BENEV/board.json`; the battery and shutdown ones are also on the Device
@@ -397,19 +401,20 @@ internet.
 
 ## Naming a head mount
 
-Every head mount has a **name**. It is also its address on the network (`http://NAME.local`),
-the heading and tab title of every page, and its name in apps that look for head mounts
-(the DNS-SD service name). With several head mounts, give each its own, for example `benev101`,
+Each head mount has a **name**. It is also its network address (`http://NAME.local`), the heading
+and tab title of every page, and its name in apps that discover head mounts (the DNS-SD service
+name). When several head mounts are in use, give each a distinct name, for example `benev101`,
 `benevtest` or `head`.
 
-Change it on the **Device** page, in the *Device name* card: type the name, press *Save name*.
-It takes about 3 seconds. Then open the new address (the page shows the link); the old address
-stops working. Names are letters, digits and hyphens, up to 63 characters, not starting or ending
-with a hyphen; capitals become lower case. If another device on the network already has that
-name, the page says so and the head mount announces itself as `NAME-2` until you choose another.
+To change it, open the **Device** page, enter the name in the *Device name* card and press
+*Save name*. The change takes about 3 seconds; then open the new address shown on the page. The old
+address stops working. Names may contain letters, digits and hyphens, up to 63 characters, and may
+not start or end with a hyphen; capital letters are converted to lower case. If another device on
+the network already uses the name, the page says so and the head mount announces itself as
+`NAME-2` until a different name is chosen.
 
-The name is the Pi's host name, so it survives restarts and updates. The Wi-Fi hotspot is still
-called "Benev AI" on every head mount; to tell them apart there, change `hotspot_ssid` in
+The name is the Pi's host name, so it persists across restarts and updates. The Wi-Fi hotspot is
+named "Benev AI" on every head mount; to distinguish them there, change `hotspot_ssid` in
 `/etc/benev/wifi.json` (see [Wi-Fi](#wi-fi)).
 
 ## Updates over the air
@@ -602,15 +607,15 @@ ssh <user>@benev.local sudo bash benev-install.sh --app-only
 - **The installer stops at the kernel headers**: run `sudo apt update && sudo apt full-upgrade -y && sudo reboot`,
   then the installer again.
 
-### Known hardware behaviour (seen on the first board)
+### Known hardware behaviour
 
 - The magnetometer reads up to ~20–30 µT off while the CPU or camera is busy, because it
   picks up the board's supply current. The calibration and filter handle the camera part
   (see [Magnetometer noise from the camera](#magnetometer-noise-from-the-camera)).
-- The accelerometer reads about 1.07 g at rest (a ~65 mg offset in the part).
-- The fuel gauge on the first board started failing on I2C with corrupted data. That is a
-  hardware fault on that board, not the software. The app rejects the bad readings.
-- After *Shut down Pi*, the HAT stays powered until you press the power button. The
+- The accelerometer reads about 1.07 g at rest (a ~65 mg offset of the part).
+- If the fuel gauge (MAX17048) returns corrupted I2C data, this indicates a hardware fault on
+  that board rather than a software problem. The app rejects the invalid readings.
+- After *Shut down Pi*, the HAT stays powered until the power button is pressed. The
   software does not drive Pi_Kill (GPIO5).
 
 ## Uninstall
