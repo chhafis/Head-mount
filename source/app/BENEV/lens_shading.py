@@ -219,17 +219,22 @@ def unevenness_pct(g):
 
 
 def oriented(lens, rotated):
-    """The lens calibration `lens` for a picture that is (rotated=True) or is not turned by 180 degrees.
-    A calibration is measured in one orientation (lens["rotated"]); turning the picture by 180 degrees
-    reverses every table (a flat row-major grid reversed is the grid turned by 180 degrees)."""
-    if not lens or bool(lens.get("rotated")) == bool(rotated):
+    """The lens calibration `lens` ready for a picture that is (rotated=True) or is not turned by 180 degrees.
+    Do not apply it twice. lens["rotated"] says whether the picture was turned when the calibration was made.
+    The ISP's own tables do not depend on the orientation but the measurement does (the raw frames it is made
+    from turn with the picture), so the tables are reversed (a flat row-major grid reversed is the grid turned
+    by 180 degrees) if the calibration was made turned, whatever the current orientation (measured on a
+    head mount: colour is even in both orientations that way). The edge gain map is measured from the
+    finished picture, so it is turned when the orientation now differs from the one it was measured in."""
+    if not lens:
         return lens
     out = dict(lens, rotated=bool(rotated))
-    alsc = dict(lens["alsc"])
-    for key in ("calibrations_Cr", "calibrations_Cb"):
-        alsc[key] = [dict(c, table=list(reversed(c["table"]))) for c in alsc[key]]
-    alsc["luminance_lut"] = list(reversed(alsc["luminance_lut"]))
-    out["alsc"] = alsc
-    if lens.get("edge_gain"):
+    if lens.get("rotated"):
+        alsc = dict(lens["alsc"])
+        for key in ("calibrations_Cr", "calibrations_Cb"):
+            alsc[key] = [dict(c, table=list(reversed(c["table"]))) for c in alsc[key]]
+        alsc["luminance_lut"] = list(reversed(alsc["luminance_lut"]))
+        out["alsc"] = alsc
+    if lens.get("edge_gain") and bool(lens.get("rotated")) != bool(rotated):
         out["edge_gain"] = [list(reversed(row)) for row in reversed(lens["edge_gain"])]
     return out
