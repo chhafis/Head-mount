@@ -18,7 +18,8 @@
 #   sudo bash benev-install.sh --update     what OTA updates run: --app-only plus missing
 #                                           packages and boot settings (no system upgrade)
 # Options: --yes (no questions, reboot at the end)  --no-reboot  --no-upgrade  --user NAME
-#          --hostname NAME (default benev)  --ota-repo OWNER/NAME (update source)  --force
+#          --hostname NAME (default: benev on a new Pi, an existing name is kept)
+#          --ota-repo OWNER/NAME (update source)  --force
 #
 # Safe to run again: every step checks whether it is already done. Log: /var/log/benev-install.log
 set -Eeuo pipefail
@@ -47,7 +48,7 @@ BUILD_PKGS="git dkms build-essential
     meson ninja-build pkg-config cmake libyaml-dev python3-yaml python3-ply python3-jinja2
     libgnutls28-dev openssl pybind11-dev python3-dev libboost-dev libudev-dev libtiff-dev"
 
-APP_ONLY=0 UPDATE=0 ASSUME_YES=0 NO_REBOOT=0 NO_UPGRADE=0 FORCE=0 TARGET_USER="" HOST_NAME=benev OTA_REPO=""
+APP_ONLY=0 UPDATE=0 ASSUME_YES=0 NO_REBOOT=0 NO_UPGRADE=0 FORCE=0 TARGET_USER="" HOST_NAME="" OTA_REPO=""
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -79,7 +80,7 @@ ask() {   # ask "question" -> 0 for yes
 TARGET_USER="${TARGET_USER:-${SUDO_USER:-}}"
 [[ -n $TARGET_USER && $TARGET_USER != root ]] || die "Run it with sudo from your normal user account, or pass --user NAME."
 id "$TARGET_USER" >/dev/null 2>&1 || die "User '$TARGET_USER' does not exist."
-[[ $HOST_NAME =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || die "Invalid host name '$HOST_NAME' (letters, digits and '-')."
+[[ -z $HOST_NAME || $HOST_NAME =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || die "Invalid host name '$HOST_NAME' (letters, digits and '-')."
 [[ -z $OTA_REPO || $OTA_REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--ota-repo must look like OWNER/NAME."
 HOME_DIR=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 APP_DIR="$HOME_DIR/BENEV"
@@ -189,9 +190,21 @@ EOF
     echo "Service running."
 }
 
+# The host name is the device's name (name.local) and can be changed on the Device page, so
+# the installer, which also runs for every update, only sets it when asked (--hostname NAME) or
+# on a Pi that still has the Raspberry Pi OS default name.
 set_hostname() {
-    local current
+    local current wanted
     current=$(hostname)
+    if [[ -n $HOST_NAME ]]; then
+        wanted=$HOST_NAME
+    elif [[ ${current,,} == raspberrypi ]]; then
+        wanted=benev
+    else
+        echo "Host name stays $current: http://${current,,}.local (rename it on the Device page)"
+        return
+    fi
+    HOST_NAME=$wanted
     if [[ ${current,,} == "${HOST_NAME,,}" ]]; then
         echo "Host name is $current: http://${current,,}.local"
         return
@@ -208,7 +221,7 @@ set_hostname() {
 }
 
 install_network() {
-    step "Setting up Wi-Fi (saved networks, otherwise the setup hotspot) and http://$HOST_NAME.local"
+    step "Setting up Wi-Fi (saved networks, otherwise the setup hotspot) and the .local name"
     set_hostname
     local sys="$PAYLOAD/BENEV/system"
     install -d -m 755 /etc/avahi/services

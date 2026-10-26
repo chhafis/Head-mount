@@ -62,7 +62,8 @@ phones cannot update over the old app:
 
 1. **Flash the card** with Raspberry Pi Imager: choose *Raspberry Pi Zero 2 W* and
    *Raspberry Pi OS (Bookworm)*. In the settings, set a username and password, your Wi-Fi,
-   and **enable SSH**. The installer sets the host name to `benev`.
+   and **enable SSH**. The installer names a new Pi `benev`; you can give it another name later
+   (see [Naming a head mount](#naming-a-head-mount)).
 2. **Copy `benev-install.sh` to the Pi.** Either:
    - over the network, from a Windows PowerShell or terminal:
      `scp benev-install.sh <user>@<pi-address>:~`
@@ -97,7 +98,7 @@ connection) and run it again. Everything already done is skipped. Full log:
 | `--no-reboot` | Never reboot; you reboot yourself later. |
 | `--no-upgrade` | Skip `apt full-upgrade` (not recommended on a fresh card). |
 | `--user NAME` | Install for that user instead of the one running `sudo`. |
-| `--hostname NAME` | Use `NAME.local` instead of `benev.local` (e.g. for a second head mount). |
+| `--hostname NAME` | Set the name to `NAME` (address `NAME.local`). Without it a new Pi becomes `benev`, and a Pi that already has another name keeps it, so updates never rename a head mount. |
 | `--force` | Continue on a board or OS it was not made for. |
 
 ## What it installs
@@ -371,6 +372,23 @@ give it a password, edit `/etc/benev/wifi.json` on the Pi:
 then `sudo systemctl restart benev-wifi`. While the hotspot runs, every DNS name points at
 the head mount; that is what makes phones open the setup page. Nothing is forwarded to the
 internet.
+
+## Naming a head mount
+
+Every head mount has a **name**. It is also its address on the network (`http://NAME.local`),
+the heading and tab title of every page, and its name in apps that look for head mounts
+(the DNS-SD service name). With several head mounts, give each its own, for example `benev101`,
+`benevtest` or `head`.
+
+Change it on the **Device** page, in the *Device name* card: type the name, press *Save name*.
+It takes about 3 seconds. Then open the new address (the page shows the link); the old address
+stops working. Names are letters, digits and hyphens, up to 63 characters, not starting or ending
+with a hyphen; capitals become lower case. If another device on the network already has that
+name, the page says so and the head mount announces itself as `NAME-2` until you choose another.
+
+The name is the Pi's host name, so it survives restarts and updates. The Wi-Fi hotspot is still
+called "Benev AI" on every head mount; to tell them apart there, change `hotspot_ssid` in
+`/etc/benev/wifi.json` (see [Wi-Fi](#wi-fi)).
 
 ## Updates over the air
 

@@ -25,6 +25,8 @@ Protocol: one JSON object per line each way, on /run/benev-wifi/wifi.sock (root:
       (no password for a saved network: uses the saved one)
   {"cmd": "forget", "ssid"}               -> {"ok": true, "message", "pending"?}
   {"cmd": "hotspot"} | {"cmd": "rejoin"}  -> {"ok": true, "pending": true, "message"}
+  {"cmd": "hostname", "name"}             -> the device's network name (name.local) changed;
+      {"ok": true, "hostname", "address", "mdns", "conflict"}
   errors                                  -> {"ok": false, "error"}
 
 Settings (optional), /etc/benev/wifi.json; restart benev-wifi after editing:
@@ -175,6 +177,51 @@ def explain(err):
     return re.sub(r"^Error: (Connection activation failed: )?", "", err) or "unknown error"
 
 
+HOSTNAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+RESERVED_NAMES = {"localhost"}
+HOSTS_FILE = Path("/etc/hosts")
+
+
+def check_hostname(name):
+    """A device name is one DNS label: letters, digits and hyphens, 1-63 characters, not
+    starting or ending with a hyphen. Names are kept in lower case (mDNS ignores case)."""
+    name = name.strip().lower()
+    if not HOSTNAME_RE.fullmatch(name):
+        raise ValueError("a device name is 1 to 63 letters, digits or hyphens, "
+                         "and cannot start or end with a hyphen")
+    if name in RESERVED_NAMES:
+        raise ValueError(f"'{name}' is reserved; choose another name")
+    return name
+
+
+def rewrite_hosts(name):
+    """Point the 127.0.1.1 line of /etc/hosts at the new name (sudo and others resolve it)."""
+    lines = HOSTS_FILE.read_text().splitlines()
+    new = f"127.0.1.1\t{name}"
+    for i, line in enumerate(lines):
+        if line.split("#")[0].split()[:1] == ["127.0.1.1"]:
+            lines[i] = new
+            break
+    else:
+        lines.append(new)
+    tmp = HOSTS_FILE.with_name(".hosts.benev")
+    tmp.write_text("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, HOSTS_FILE)
+
+
+def avahi_hostname():
+    """The host name avahi is really announcing (it adds -2, -3 ... on a clash), or None."""
+    try:
+        r = subprocess.run(["busctl", "--system", "call", "org.freedesktop.Avahi", "/",
+                            "org.freedesktop.Avahi.Server", "GetHostName"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r'"([^"]+)"', r.stdout)
+    return m.group(1).lower() if r.returncode == 0 and m else None
+
+
 def load_settings():
     settings = dict(DEFAULTS)
     try:
@@ -205,6 +252,7 @@ class Manager:
         self.settings = load_settings()
         self.iface = self.settings["interface"]
         self.job_lock = threading.Lock()
+        self.host_lock = threading.Lock()
         self.scan_lock = threading.Lock()
         self.job = None                # what is being changed right now, or None
         self.mode = "starting"         # client | hotspot | connecting | disconnected | unavailable
@@ -507,7 +555,27 @@ class Manager:
             self.start_job("Looking for saved networks", self._rejoin)
             self.hold = False
             return {"ok": True, "pending": True, "message": self.message}
+        if cmd == "hostname":
+            return self.request_hostname(str(req.get("name") or ""))
         raise ValueError(f"unknown command {cmd!r}")
+
+    def request_hostname(self, name):
+        """Rename the device: system host name, /etc/hosts, and the name.local announcement."""
+        name = check_hostname(name)
+        with self.host_lock:
+            current = socket.gethostname().lower()
+            if name != current:
+                rewrite_hosts(name)   # first, so that sudo can still resolve the host name
+                r = subprocess.run(["hostnamectl", "set-hostname", name], capture_output=True, text=True, timeout=20)
+                if r.returncode != 0:
+                    rewrite_hosts(current)
+                    raise RuntimeError(f"could not change the host name: {(r.stderr or r.stdout).strip()}")
+                subprocess.run(["systemctl", "restart", "avahi-daemon"], capture_output=True, timeout=30)
+                log.info("device renamed from %s to %s", current, name)
+                time.sleep(2.5)   # let avahi announce the name, and report any clash
+            mdns = avahi_hostname()
+        return {"ok": True, "hostname": name, "address": f"{name}.local",
+                "mdns": f"{mdns}.local" if mdns else None, "conflict": bool(mdns and mdns != name)}
 
     def request_connect(self, ssid, password):
         check_ssid(ssid)

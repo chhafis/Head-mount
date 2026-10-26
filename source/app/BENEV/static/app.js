@@ -978,6 +978,54 @@ setInterval(() => {
   document.getElementById("rec-time").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }, 250);
 
+// ---------- device name (the host name: name.local)
+
+const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const nameInput = document.getElementById("name-input");
+
+function showDeviceName(d) {
+  if (document.activeElement !== nameInput) nameInput.value = d.name;
+  setText("name-address", `http://${d.address || `${d.name}.local`}`);
+}
+
+fetch("/api/device", { cache: "no-store" }).then((r) => r.json()).then(showDeviceName, () => {});
+
+document.getElementById("name-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const msg = document.getElementById("name-msg"), save = document.getElementById("name-save");
+  const name = nameInput.value.trim().toLowerCase();
+  msg.classList.remove("error");
+  if (!NAME_RE.test(name)) {
+    msg.textContent = "Use 1 to 63 letters, digits or hyphens, not starting or ending with a hyphen.";
+    msg.classList.add("error");
+    return;
+  }
+  save.disabled = true;
+  msg.textContent = "Renaming… this takes a few seconds.";
+  try {
+    const r = await postJson("/api/device", { name });
+    nameInput.value = r.hostname;
+    const url = `http://${r.address}/`;
+    msg.replaceChildren(document.createTextNode(r.conflict
+      ? `Another device on this network already uses that name, so this one is announcing itself as ${r.mdns}. Pick a different name. `
+      : "Renamed. If this page stops responding, open the new address: "));
+    const a = document.createElement("a");
+    a.href = url;
+    a.textContent = url;
+    msg.append(a);
+    if (r.conflict) msg.classList.add("error");
+    const h1 = document.querySelector("header h1");
+    if (h1) h1.textContent = r.hostname;
+    document.title = `${r.hostname} · Device`;
+    showDeviceName({ name: r.hostname, address: r.address });
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.classList.add("error");
+  } finally {
+    save.disabled = false;
+  }
+});
+
 // ---------- shutdown
 
 // True on the confirming second tap within 4 s; the first tap shows the prompt on the button.

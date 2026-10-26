@@ -10,7 +10,7 @@
   try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 </script>
 </head>
-<body class="viz-root record-page">
+<body class="viz-root record-page" data-page="Record">
 <header class="topbar">
   <div>
     <h1>Benev</h1>
@@ -130,5 +130,6 @@
 
 <script src="/cube.js"></script>
 <script src="/record.js"></script>
+<script src="/name.js"></script>
 </body>
 </html>

@@ -17,6 +17,7 @@ the folder format. POST endpoints take JSON:
                      | "lens_calibrate" | "lens_reset" | "image" | "image_reset" | "brightness", ...}
   /api/system       {"action": "shutdown" | "reboot"}
   /api/update       {"action": "check" | "install"}       (GET: state of the GitHub updater)
+  /api/device       {"name"}  rename the head mount (name.local)   (GET: {"name", "address", "version"})
 GET /api/status: version, recording, power and battery in one small object.
 
     python3 server.py [--port 80 --port 8080]
@@ -57,7 +58,20 @@ OTA_STATE = Path("/var/lib/benev/ota/state.json")      # written by system/ota.p
 REBOOT_FLAG = Path("/run/benev-reboot-required")        # an update changed config.txt
 WIFI_SOCKET = "/run/benev-wifi/wifi.sock"           # benev-wifi.service (runs as root)
 HOTSPOT_IP = "10.42.0.1"                             # NetworkManager "shared" mode address
-OWN_HOSTS = {"benev.local", "benev", HOTSPOT_IP, "localhost", "127.0.0.1"}
+
+
+DEVICE_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def device_name():
+    """This head mount's name: its host name, which is also its address (name.local)."""
+    return socket.gethostname().lower()
+
+
+def own_hosts():
+    """Names the app answers to as itself; any other Host name on the hotspot is a captive-portal probe."""
+    name = device_name()
+    return {name, f"{name}.local", HOTSPOT_IP, "localhost", "127.0.0.1"}
 
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -313,7 +327,7 @@ class App:
         return {"version": VERSION, "recording": self.recording(), "session": self.sessions.status(),
                 "session_busy": self.sessions.busy, "board": self.board.status(),
                 "battery_soc": self.sampler.battery_soc(), "calibrated": self.calibration.done,
-                "wifi_mode": self.wifi.cached.get("mode")}
+                "wifi_mode": self.wifi.cached.get("mode"), "name": device_name()}
 
     def shutdown(self, reason, reboot=False):
         """Save recordings, then power off (web button, power button, or unplugged too long)."""
@@ -387,6 +401,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(self.app.board.status())
         elif path == "/api/status":
             self._send_json(self.app.status())
+        elif path == "/api/device":
+            self._send_json({"name": device_name(), "address": f"{device_name()}.local", "version": VERSION})
         elif path == "/api/update":
             self._send_json(self._update_state())
         elif path == "/api/wifi":
@@ -405,7 +421,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.app.wifi.hotspot:
             return False
         host = (self.headers.get("Host") or "").split(":")[0].lower()
-        if host in OWN_HOSTS or self.server.server_address[1] != 80:
+        if host in own_hosts() or self.server.server_address[1] != 80:
             return False
         self.send_response(302)
         self.send_header("Location", f"http://{HOTSPOT_IP}/wifi")
@@ -451,7 +467,8 @@ class Handler(BaseHTTPRequestHandler):
                     "/api/media/delete": self._post_media_delete, "/api/system": self._post_system,
                     "/api/session": self._post_session, "/api/sessions/delete": self._post_session_delete,
                     "/api/calibration": self._post_calibration, "/api/wifi": self._post_wifi,
-                    "/api/board": self._post_board, "/api/update": self._post_update}
+                    "/api/board": self._post_board, "/api/update": self._post_update,
+                    "/api/device": self._post_device}
         handler = handlers.get(self.path.split("?", 1)[0])
         if handler is None:
             return self._send(404, "text/plain; charset=utf-8", b"not found\n")
@@ -548,6 +565,20 @@ class Handler(BaseHTTPRequestHandler):
         if r.returncode != 0:
             raise RuntimeError(f"could not start the updater: {(r.stderr or r.stdout).strip() or r.returncode}")
         self._send_json({"ok": True, **self._update_state()})
+
+    def _post_device(self, body):
+        """Rename the head mount; the root Wi-Fi manager applies the name (see its hostname command)."""
+        name = body["name"]
+        if not isinstance(name, str):
+            raise ValueError("the name must be text")
+        if not DEVICE_NAME_RE.fullmatch(name.strip().lower()):   # the manager checks again, as root
+            raise ValueError("a device name is 1 to 63 letters, digits or hyphens, "
+                             "and cannot start or end with a hyphen")
+        try:
+            reply = self.app.wifi.request({"cmd": "hostname", "name": name}, timeout=30)
+        except OSError as e:
+            raise RuntimeError(f"the Wi-Fi manager (benev-wifi.service) is not reachable: {e}") from e
+        self._send_json({**reply, "name": device_name()})
 
     def _post_board(self, body):
         self._send_json(self.app.board.update_settings(body))

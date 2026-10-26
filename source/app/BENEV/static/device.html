@@ -9,7 +9,7 @@
   try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 </script>
 </head>
-<body class="viz-root">
+<body class="viz-root" data-page="Device">
 <header class="topbar">
   <div>
     <h1>Benev device</h1>
@@ -40,6 +40,23 @@
 </div>
 
 <main>
+  <section class="card" aria-labelledby="name-h">
+    <div class="card-head">
+      <h2 id="name-h">Device name</h2>
+      <span class="muted" id="name-address"></span>
+    </div>
+    <form class="name-form" id="name-form">
+      <label class="visually-hidden" for="name-input">Device name</label>
+      <div class="name-input-row">
+        <input id="name-input" type="text" maxlength="63" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        <span class="name-suffix">.local</span>
+      </div>
+      <button id="name-save" type="submit" class="primary">Save name</button>
+    </form>
+    <p class="muted name-help">This is the head mount's address (<code>http://name.local</code>), its title on every page, and how it shows up on the network and in apps. Use letters, digits and hyphens (up to 63), for example <code>head</code> or <code>benev101</code>. Give every head mount its own name.</p>
+    <p class="camera-msg" id="name-msg" role="status"></p>
+  </section>
+
   <section class="card" aria-labelledby="outputs-h">
     <div class="card-head">
       <h2 id="outputs-h">Fan &amp; LEDs <span class="chip">GPIO high = on (AO3400A low-side switches)</span></h2>
@@ -227,5 +244,6 @@
 </main>
 
 <script src="/app.js"></script>
+<script src="/name.js"></script>
 </body>
 </html>

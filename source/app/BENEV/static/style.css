@@ -481,3 +481,18 @@ button:disabled { opacity: 0.55; cursor: default; }
 .lens-how { font-size: 13px; color: var(--text-secondary); }
 .lens-how summary { cursor: pointer; padding: 4px 0; }
 .lens-how ol { margin: 6px 0 6px 18px; padding: 0; display: grid; gap: 4px; }
+
+.host-tag { font-size: 13px; font-weight: 500; color: var(--text-secondary); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 10px; margin-left: 8px; vertical-align: middle; }
+.host-tag:empty { display: none; }
+
+/* ---------- device name ---------- */
+.name-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.name-input-row { display: flex; align-items: center; gap: 4px; flex: 1 1 220px; max-width: 420px; }
+.name-input-row input {
+  font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-1); color: var(--text-primary); flex: 1; min-width: 0;
+}
+.name-suffix { color: var(--text-secondary); }
+.name-help { font-size: 13px; }
+.name-help code { font-size: 12px; }
