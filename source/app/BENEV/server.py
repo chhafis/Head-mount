@@ -635,6 +635,12 @@ class Handler(BaseHTTPRequestHandler):
                     em = camera.command({"cmd": "edge_map"}, timeout=120)
                     camera.set_edge_gain(em["grid"])
                     edge = {"max_gain": round(em["max_gain"], 1), "boosted_pct": em["boosted_pct"]}
+                    if measured["stats"]["dark_area_pct"] >= 5 and not camera.image_settings()["edge_boost"]:
+                        camera.set_edge_boost(1.0)   # a lot of the picture is beyond the ISP's reach: use the filter
+                        edge["switched_on"] = True
+                        warnings.append("Edge brightening was switched on (100 %) because a large part of the picture "
+                                        "is darker than the lens correction can lift. Lower it with the slider if the "
+                                        "edges look noisy.")
                 except (CameraError, OSError, KeyError, ValueError) as e:
                     warnings.append(f"The map for edge brightening could not be measured ({e}); "
                                     "the lens correction itself is saved.")
