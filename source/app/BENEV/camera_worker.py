@@ -57,7 +57,9 @@ def image_controls():
     for key, value in wanted.items():
         out[key] = getattr(enums[key], value) if key in enums else value
     return out
-TRANSFORM = Transform()   # libcamera already corrects the 180° mounting from the overlay (rotation=180)
+# libcamera already corrects the 180° mounting from the overlay (rotation=180); BENEV_ROTATE180 turns the
+# picture by a further 180° for a head mount worn the other way up.
+TRANSFORM = Transform(hflip=1, vflip=1) if os.environ.get("BENEV_ROTATE180") == "1" else Transform()
 
 out_lock = threading.Lock()
 
@@ -227,7 +229,8 @@ class CameraService:
     @staticmethod
     def _load_edge_grid():
         try:
-            grid = json.loads(LENS_FILE.read_text()).get("edge_gain")
+            lens = lens_shading.oriented(json.loads(LENS_FILE.read_text()), TRANSFORM.hflip)
+            grid = lens.get("edge_gain")
             return np.array(grid, dtype=np.float32) if grid else None
         except (OSError, ValueError, TypeError):
             return None

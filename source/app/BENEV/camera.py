@@ -17,11 +17,13 @@ from pathlib import Path
 
 import edge_boost
 import image_tuning
+import lens_shading
 
 HERE = Path(__file__).resolve().parent
 MEDIA = HERE / "media"
 SETTINGS_FILE = HERE / "camera.json"
-DEFAULT_SETTINGS = {"width": 1920, "height": 1080, "fps": 30, "raw": False, "front_axis": "+x", "image": {}}
+DEFAULT_SETTINGS = {"width": 1920, "height": 1080, "fps": 30, "raw": False, "front_axis": "+x", "rotate180": False,
+                    "image": {}}
 IDLE_STOP_S = 5.0
 START_TIMEOUT_S = 20.0
 # The worker's libcamera uses a copy of the sensor's tuning file (camera-tuning.json) instead of
@@ -39,7 +41,7 @@ MEDIA_TYPES = {".jpg": "image/jpeg", ".dng": "image/x-adobe-dng",
 log = logging.getLogger("dashboard")
 
 
-def write_tuning(image):
+def write_tuning(image, rotate180=False):
     """Build camera-tuning.json for the image settings `image` (a full settings dict) and the
     lens calibration, if any. -> its path."""
     tuning = json.loads(TUNING_BASE.read_text())
@@ -48,6 +50,7 @@ def write_tuning(image):
         lens = json.loads(LENS_FILE.read_text())
     except FileNotFoundError:
         lens = None
+    lens = lens_shading.oriented(lens, rotate180)
     if lens:
         for algo in tuning["algorithms"]:
             if "rpi.alsc" in algo:
@@ -206,6 +209,8 @@ class CameraFeed:
     def set_edge_gain(self, grid):
         """Store the edge gain map next to the lens calibration and make the running camera use it."""
         lens = json.loads(LENS_FILE.read_text())
+        if bool(lens.get("rotated")) != bool(self.settings.get("rotate180")):   # store it as the lens file is oriented
+            grid = [list(reversed(row)) for row in reversed(grid)]
         lens["edge_gain"] = grid
         tmp = LENS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(lens, indent=1))
@@ -218,10 +223,19 @@ class CameraFeed:
         if data is None:
             LENS_FILE.unlink(missing_ok=True)
         else:
+            data = dict(data, rotated=bool(self.settings.get("rotate180")))   # the orientation it was measured in
             tmp = LENS_FILE.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, indent=1))
             os.replace(tmp, LENS_FILE)
         self.lens = lens_status()
+        self.restart()
+
+    def set_rotation(self, rotated):
+        """Turn the picture by 180 degrees (camera mounted upside down). Saved; the worker restarts with it."""
+        rotated = bool(rotated)
+        if rotated == bool(self.settings.get("rotate180")):
+            return
+        self.update_settings(rotate180=rotated)
         self.restart()
 
     def restart(self):
@@ -282,7 +296,7 @@ class CameraFeed:
         env = {**os.environ, "PYTHONPATH": LIBCAMERA_PYTHONPATH, "LIBCAMERA_LOG_LEVELS": "*:WARN"}
         image = self.image_settings()
         try:
-            tuning = write_tuning(image)
+            tuning = write_tuning(image, bool(s.get("rotate180")))
         except (OSError, ValueError, KeyError) as e:
             log.warning("image tuning and lens calibration not used: %s", e)
             tuning = None
@@ -293,6 +307,7 @@ class CameraFeed:
             ctl["AeExposureMode"] = "Short"
         env["BENEV_IMAGE_CONTROLS"] = json.dumps(ctl)
         env["BENEV_EDGE_BOOST"] = str(image["edge_boost"])
+        env["BENEV_ROTATE180"] = "1" if s.get("rotate180") else "0"
         self.proc = subprocess.Popen(
             [sys.executable, str(HERE / "camera_worker.py"), str(s["width"]), str(s["height"]), str(s["fps"])],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)

@@ -677,6 +677,7 @@ const camApply = document.getElementById("cam-apply");
 const camPhoto = document.getElementById("cam-photo");
 const camRecord = document.getElementById("cam-record");
 const camRaw = document.getElementById("cam-raw");
+const camRotate = document.getElementById("cam-rotate");
 let camStatus = null;
 let camBusy = false;          // a camera command is in flight
 let camEditing = false;       // the user changed the mode selectors but has not applied them
@@ -759,6 +760,10 @@ camApply.addEventListener("click", async () => {
 });
 
 camRaw.addEventListener("change", () => camCommand({ action: "settings", raw: camRaw.checked }));
+camRotate.addEventListener("change", async () => {
+  await camCommand({ action: "settings", rotate180: camRotate.checked }, "Turning the picture, the camera restarts…");
+  camMessage(camRotate.checked ? "Picture rotated by 180°. Calibrate the lens again if you had done so in the other orientation." : "Picture back to normal orientation.");
+});
 
 function renderCameraControls() {
   const c = camStatus;
@@ -991,7 +996,10 @@ function updateCamera(c) {
     camRes.value = i >= 0 ? i : 0;
     fillFps(s.fps);
   }
-  if (s) camRaw.checked = Boolean(s.raw);
+  if (s) {
+    camRaw.checked = Boolean(s.raw);
+    camRotate.checked = Boolean(s.rotate180);
+  }
 
   const m = c.camera;
   const cfg = m && m.config;

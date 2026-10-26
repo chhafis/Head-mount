@@ -216,3 +216,20 @@ def unevenness_pct(g):
     z = np.log(g[valid])
     coef, *_ = np.linalg.lstsq(terms, z, rcond=None)
     return round(float(np.max(np.abs(np.expm1(z - terms @ coef))) * 100), 1)
+
+
+def oriented(lens, rotated):
+    """The lens calibration `lens` for a picture that is (rotated=True) or is not turned by 180 degrees.
+    A calibration is measured in one orientation (lens["rotated"]); turning the picture by 180 degrees
+    reverses every table (a flat row-major grid reversed is the grid turned by 180 degrees)."""
+    if not lens or bool(lens.get("rotated")) == bool(rotated):
+        return lens
+    out = dict(lens, rotated=bool(rotated))
+    alsc = dict(lens["alsc"])
+    for key in ("calibrations_Cr", "calibrations_Cb"):
+        alsc[key] = [dict(c, table=list(reversed(c["table"]))) for c in alsc[key]]
+    alsc["luminance_lut"] = list(reversed(alsc["luminance_lut"]))
+    out["alsc"] = alsc
+    if lens.get("edge_gain"):
+        out["edge_gain"] = [list(reversed(row)) for row in reversed(lens["edge_gain"])]
+    return out

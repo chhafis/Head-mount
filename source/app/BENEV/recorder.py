@@ -23,6 +23,8 @@ import time
 import zipfile
 from pathlib import Path
 
+import lens_shading
+
 log = logging.getLogger("dashboard")
 
 FORMAT_VERSION = 1
@@ -122,10 +124,10 @@ class SessionManager:
             raise
 
     @staticmethod
-    def _save_edge_map(folder):
+    def _save_edge_map(folder, rotated=False):
         """Copy the lens's edge gain map into the session: tools/edge_boost_video.py needs it."""
         try:
-            lens = json.loads((Path(__file__).resolve().parent / "lens-shading.json").read_text())
+            lens = lens_shading.oriented(json.loads((Path(__file__).resolve().parent / "lens-shading.json").read_text()), rotated)
             grid = lens.get("edge_gain")
             if grid:
                 (folder / "edge_gain.json").write_text(json.dumps(
@@ -163,7 +165,8 @@ class SessionManager:
             raise
         meta["camera"] = (self.camera.status().get("camera") or {}).get("config")
         meta["image"] = self.camera.image_settings()   # exposure limit, brightness, edge brightening, ...
-        self._save_edge_map(folder)
+        self._save_edge_map(folder, bool(self.camera.settings.get("rotate180")))
+        meta["camera_rotate180"] = bool(self.camera.settings.get("rotate180"))
         meta["camera_front_axis"] = self.camera.settings.get("front_axis", "+x")   # which IMU axis the lens looks along
         meta["video_file"] = video["file"]
         self.active = {"id": sid, "folder": folder, "log": lg, "t0": time.monotonic(), "meta": meta,

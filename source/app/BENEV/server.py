@@ -614,6 +614,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("front_axis must be one of +x -x +y -y +z -z")
                 changes["front_axis"] = body["front_axis"]
             camera.update_settings(**changes)
+            if "rotate180" in body:
+                if self.app.recording():
+                    raise RuntimeError("stop the recording before turning the picture")
+                camera.set_rotation(body["rotate180"])
             result = camera.settings
         elif action == "lens_calibrate":
             if self.app.recording():
