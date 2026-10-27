@@ -47,14 +47,15 @@ def main():
     map_file = Path(args.map) if args.map else (src if src.is_dir() else src.parent) / "edge_gain.json"
     if not map_file.is_file():
         sys.exit(f"{map_file} not found: this recording was made without a lens calibration with an edge map")
-    grid = np.array(json.loads(map_file.read_text())["grid"], dtype=np.float32)
+    saved = json.loads(map_file.read_text())
+    grid = np.array(saved["grid"], dtype=np.float32)
     out_path = Path(args.output) if args.output else video.with_name(video.stem + "_edge.mp4")
 
     with av.open(str(video)) as inp:
         vs = inp.streams.video[0]
         w, h = vs.codec_context.width, vs.codec_context.height
         limited = getattr(vs.codec_context, "color_range", 1) != 2          # 2 = full (JPEG) range
-        maps = edge_boost.maps_for(edge_boost.build_log_gain(grid, crop_for(w, h), (w, h)), args.strength)
+        maps = edge_boost.maps_for(edge_boost.build_log_gain(grid, tuple(saved.get("crop") or crop_for(w, h)), (w, h)), args.strength)
         if maps is None:
             sys.exit("nothing to brighten at this strength")
         rate = vs.average_rate or Fraction(30)

@@ -255,7 +255,7 @@ priority 20 (they sleep between reads, so they take very little CPU).
 | Resolution | Max fps | Field of view |
 |---|---|---|
 | 1920×1200 | 25 | full sensor |
-| 1920×1080 | 30 | crop |
+| 1920×1080 | 30 | crop: Camera 1 keeps the lower 1080 lines of the 1920×1200 readout (120 lines are cut from the top, where its lens gives the least light); Camera 2 uses the sensor's centred 1080-line mode |
 | 1280×720 | 60 | crop |
 | 960×600 | 100 | full (2×2 binned) |
 

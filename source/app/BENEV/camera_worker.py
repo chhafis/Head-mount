@@ -39,6 +39,10 @@ H264_MAX = (1920, 1080)         # largest frame the VideoCore H.264 encoder acce
 # (measured 2026-10-23, 10-bit sensor modes, Fast denoise, preview running; above these the
 # ISP or encoder falls behind: 1200p30 MJPEG -> 28.4 fps, 1080p60 -> 44, 720p100 -> 79).
 RECORD_MAX_FPS = {(1920, 1200): 25, (1920, 1080): 30, (1280, 720): 60, (960, 600): 100}
+# Camera 1 (picture not rotated): take the cut of a shorter picture off the top, not both ends.
+CROP_FROM_TOP = os.environ.get("BENEV_ROTATE180") != "1"
+# Whether that is the start (y = 0) of the sensor's coordinates; the overlay's 180-degree mounting flips them.
+SENSOR_CUT_AT_START = os.environ.get("BENEV_CUT_AT_START", "0") == "1"
 JPEG_QUALITY = 95
 SHADING_FRAMES = 8              # raw frames averaged for the lens shading calibration
 LENS_FILE = Path(__file__).resolve().parent / "lens-shading.json"
@@ -182,6 +186,20 @@ class CameraService:
     def configure(self, width, height, fps):
         size = (even(width), even(height))
         mode = self._sensor_mode_for(size, fps)
+        # Camera 1: its lens lights the lower part of the sensor, so a picture shorter than the sensor is cut
+        # from the full-height readout with the cut taken off the top (the sensor's own 1080-line mode would
+        # take 60 lines off both ends).
+        self.picture_crop = None
+        scaler_crop = {}
+        if CROP_FROM_TOP and size[0] == self.full_size[0] and size[1] < self.full_size[1]:
+            mode = max((m for m in self.modes if m[0] == self.full_size), key=lambda m: m[2])
+            cut = self.full_size[1] - size[1]
+            self.picture_crop = (0, cut, size[0], size[1])      # in the finished 1920x1200 picture
+            limits = next((m["crop_limits"] for m in self.picam2.sensor_modes
+                           if tuple(m["size"]) == tuple(mode[0]) and m["bit_depth"] == mode[2]), None)
+            if limits:
+                x0, y0 = limits[0], limits[1]
+                scaler_crop = {"ScalerCrop": (x0, y0 + (0 if SENSOR_CUT_AT_START else cut), size[0], size[1])}
         fps = min(float(fps), mode[1], RECORD_MAX_FPS.get(size, mode[1]))
         preview = (even(PREVIEW_WIDTH), even(PREVIEW_WIDTH * size[1] / size[0]))
         frame_us = int(1e6 / fps)
@@ -195,7 +213,7 @@ class CameraService:
             # HighQuality denoise caps the VideoCore ISP at ~16 fps for 1080p; stills still get it.
             controls={"FrameDurationLimits": (frame_us, frame_us),
                       "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.Fast,
-                      **image_controls(), **self.live_controls})
+                      **scaler_crop, **image_controls(), **self.live_controls})
         self._stop_preview()
         if self.picam2.started:
             self.picam2.stop()
@@ -210,6 +228,8 @@ class CameraService:
         self.config = {"width": size[0], "height": size[1], "fps": round(fps, 2),
                        "sensor_mode": f"{mode[0][0]}x{mode[0][1]} {mode[2]}-bit",
                        "record_codec": "h264" if size[0] <= H264_MAX[0] and size[1] <= H264_MAX[1] else "mjpeg"}
+        if self.picture_crop:
+            self.config["crop"] = list(self.picture_crop)
         self.preview.every = max(1, round(fps / PREVIEW_FPS))
         self._start_preview()
         self._build_boost()
@@ -242,7 +262,7 @@ class CameraService:
             # Only the small preview picture: brightening the full 1080p video frame costs 35-40 ms per
             # frame in the running camera (measured), more than the 33 ms a 30 fps frame has.
             self._edge_sizes = {"lores": tuple(self.picam2.camera_config["lores"]["size"])}
-            self._edge_crop = self.mode_info.get("crop_limits") or (0, 0) + edge_boost.FULL_FRAME
+            self._edge_crop = self.picture_crop or self.mode_info.get("crop_limits") or (0, 0) + edge_boost.FULL_FRAME
         self._schedule_boost(rebuild=True)
 
     def _schedule_boost(self, rebuild=False):
