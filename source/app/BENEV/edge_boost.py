@@ -29,6 +29,9 @@ SOURCE = HERE / "edge_boost.c"
 LIBRARY = HERE / "libedgeboost.so"   # not edge_boost.so: Python would import that instead of edge_boost.py
 FULL_FRAME = (1920, 1200)    # the frame the map is measured on (the sensor's full mode)
 CHROMA_STRENGTH = 0.7        # colour is reduced by gain ** -0.7 where the gain is large
+NR_START, NR_FULL = 1.3, 4.3                 # gain at which noise reduction starts / is complete (brightness)
+NR_START_CHROMA, NR_FULL_CHROMA = 1.15, 3.0  # the same for colour, which is noisier
+NR_PIXELS_PER_RADIUS = 200   # neighbourhood radius = picture width / 200 (3 px at 640, 10 px at 1920)
 
 _lib = None
 last_error = None
@@ -60,6 +63,13 @@ def load():
         lib.boost_luma.argtypes = [p, ctypes.c_int, ctypes.c_int, ctypes.c_int, p, ctypes.c_int, ctypes.c_int]
         lib.soften_chroma.argtypes = [p, ctypes.c_int, ctypes.c_int, ctypes.c_int, p]
         lib.boost_rgb.argtypes = [p, ctypes.c_int, ctypes.c_int, ctypes.c_int, p]
+        i = ctypes.c_int
+        lib.boost_luma_nr.argtypes = [p, i, i, i, p, p, i, i, i]
+        lib.soften_chroma_nr.argtypes = [p, i, i, i, p, p, i]
+        lib.boost_rgb_nr.argtypes = [p, i, i, i, p, p, i]
+        lib.desaturate_rgb.argtypes = [p, i, i, i, p, i]
+        for f in (lib.boost_luma_nr, lib.soften_chroma_nr, lib.boost_rgb_nr):
+            f.restype = i
         _lib, last_error = lib, None
     except (OSError, RuntimeError, subprocess.SubprocessError) as e:
         last_error = f"edge brightening is not available: {e}"
@@ -74,9 +84,12 @@ def _resize(arr, size):
 class Maps:
     """Gain maps for one picture size: luma gain (8.8 fixed point) and chroma keep factor (0-256)."""
 
-    def __init__(self, gain, keep):
+    def __init__(self, gain, keep, mix, mix_chroma, radius):
         self.gain = np.ascontiguousarray(gain, dtype=np.uint16)
         self.keep = np.ascontiguousarray(keep, dtype=np.uint8)
+        self.mix = np.ascontiguousarray(mix, dtype=np.uint8)               # noise reduction, luma / colour channels
+        self.mix_chroma = np.ascontiguousarray(mix_chroma, dtype=np.uint8)  # the same for the chroma planes
+        self.radius = int(radius)                                          # of the neighbourhood averaged
 
     @property
     def max_gain(self):
@@ -109,8 +122,13 @@ def maps_for(log_gain, strength):
     gain = np.exp(log_gain.luma * np.float32(strength))
     if float(gain.max()) < 1.02:
         return None
-    keep = np.clip(256 * np.exp(log_gain.chroma * np.float32(-CHROMA_STRENGTH * strength)), 32, 256)
-    return Maps(np.clip(gain, 1.0, 255) * 256, keep)
+    chroma_gain = np.exp(log_gain.chroma * np.float32(strength))
+    keep = np.clip(256 * np.exp(log_gain.chroma * np.float32(-CHROMA_STRENGTH * strength)), 32, 255)   # 255: it is stored in a byte
+    # Noise grows with the gain: from NR_START on, mix in the average of the neighbours (fully by NR_FULL).
+    mix = np.clip((gain - NR_START) / (NR_FULL - NR_START), 0, 1) * 255
+    mix_chroma = np.clip((chroma_gain - NR_START_CHROMA) / (NR_FULL_CHROMA - NR_START_CHROMA), 0, 1) * 255
+    radius = max(2, round(gain.shape[1] / NR_PIXELS_PER_RADIUS))
+    return Maps(np.clip(gain, 1.0, 255) * 256, keep, mix, mix_chroma, radius)
 
 
 def build_maps(grid, strength, crop, size):
@@ -132,10 +150,12 @@ def apply(maps, array, size, stride, limited_range):
     y = array[:h]
     u = array[h:h + h // 4].reshape(h // 2, stride // 2)
     v = array[h + h // 4:h + h // 2].reshape(h // 2, stride // 2)
-    lib.boost_luma(y.ctypes.data, stride, w, h, maps.gain.ctypes.data, lo, hi)
-    lib.soften_chroma(u.ctypes.data, stride // 2, w // 2, h // 2, maps.keep.ctypes.data)
-    lib.soften_chroma(v.ctypes.data, stride // 2, w // 2, h // 2, maps.keep.ctypes.data)
-    return True
+    r = maps.radius
+    bad = lib.boost_luma_nr(y.ctypes.data, stride, w, h, maps.gain.ctypes.data, maps.mix.ctypes.data, r, lo, hi)
+    for plane in (u, v):
+        bad |= lib.soften_chroma_nr(plane.ctypes.data, stride // 2, w // 2, h // 2, maps.keep.ctypes.data,
+                                    maps.mix_chroma.ctypes.data, r)
+    return bad == 0
 
 
 def apply_rgb(maps, array, size):
@@ -144,15 +164,36 @@ def apply_rgb(maps, array, size):
     w, h = size
     if lib is None or maps is None or array.ndim != 3 or array.shape[0] != h or array.shape[1] < w or not array.flags.c_contiguous:
         return False
-    lib.boost_rgb(array.ctypes.data, array.strides[0], w, h, maps.gain.ctypes.data)
-    return True
+    bad = lib.boost_rgb_nr(array.ctypes.data, array.strides[0], w, h, maps.gain.ctypes.data,
+                           maps.mix.ctypes.data, maps.radius)
+    lib.desaturate_rgb(array.ctypes.data, array.strides[0], w, h, maps.keep.ctypes.data, maps.keep.shape[1])
+    return bad == 0
+
+
+def _blur_fp(d, radius):
+    """Average of the (2R+1)^2 neighbourhood (edges repeated) in 8.8 fixed point; d: int32 plane."""
+    n = 2 * radius + 1
+    p = np.pad(d, radius, mode="edge").astype(np.int64)
+    for axis in (0, 1):
+        c = np.cumsum(p, axis=axis)
+        c = np.concatenate([np.zeros_like(np.take(c, [0], axis=axis)), c], axis=axis)
+        p = np.take(c, range(n, c.shape[axis]), axis=axis) - np.take(c, range(0, c.shape[axis] - n), axis=axis)
+    return (p.astype(np.float32) * np.float32(256.0 / (float(n) * float(n)))).astype(np.int32)
+
+
+def _mixed(plane, lo, mix, radius):
+    d = np.maximum(plane.astype(np.int32) - lo, 0)
+    d_fp = d << 8
+    blur = _blur_fp(d, radius)
+    return np.maximum(d_fp + (((blur - d_fp) * mix.astype(np.int32)) >> 8), 0)
 
 
 def apply_numpy(maps, y, u, v, limited_range):
-    """The same correction as apply(), in numpy, for the offline tool (a PC does a frame in tens of
-    milliseconds). y, u, v: uint8 planes (u and v half size); changed in place."""
+    """The same correction as apply(), in numpy, for the offline tool (a PC does a frame in a fraction
+    of a second). y, u, v: uint8 planes (u and v half size); changed in place."""
     lo, hi = (16, 235) if limited_range else (0, 255)
-    d = np.maximum(y.astype(np.int32) - lo, 0)
-    y[...] = np.minimum(((d * maps.gain.astype(np.int32)) >> 8) + lo, hi).astype(np.uint8)
+    m = _mixed(y, lo, maps.mix, maps.radius).astype(np.uint64)
+    y[...] = np.minimum(((m * maps.gain.astype(np.uint64)) >> 16) + lo, hi).astype(np.uint8)
     for plane in (u, v):
-        plane[...] = (128 + (((plane.astype(np.int32) - 128) * maps.keep.astype(np.int32)) >> 8)).astype(np.uint8)
+        m = _mixed(plane, 0, maps.mix_chroma, maps.radius)
+        plane[...] = np.clip(128 + (((m - 32768) * maps.keep.astype(np.int32)) >> 16), 0, 255).astype(np.uint8)

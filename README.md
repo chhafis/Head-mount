@@ -315,8 +315,11 @@ For lenses whose image circle is smaller than the sensor, the **Edge brightening
 and Device pages) applies a further digital gain of up to 8× to the dark areas. During lens
 calibration the head mount measures the remaining shading with the ISP correction active and stores
 it as a 20×32 gain map (`edge_gain` in `lens-shading.json`), so the map is specific to each lens.
-Colour saturation is reduced where the gain is high, because noise is amplified with it. The
-feature is off by default.
+Where the gain is high the noise grows with it, so the filter also averages each pixel with its
+neighbours and reduces colour there, in proportion to the gain (as camera image processors do with
+lens shading gain). The lifted edges are therefore smoother and less detailed than the centre. The
+feature is switched on by a lens calibration that leaves much of the picture dark, and can be
+lowered or turned off with the slider.
 
 - **Scope.** Edge brightening applies to the live preview and to photos. Recorded video is not
   modified: processing a 1080p frame takes 35–40 ms on the Raspberry Pi Zero 2 W, which exceeds
