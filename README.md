@@ -344,7 +344,8 @@ lowered or turned off with the slider.
 | Battery-low LED (BAT_LOW_R) | GPIO16 | On below 15 % battery (off again above 18 %). **Blinks slowly while running on battery** and counting down to the automatic shutdown. |
 | Fan (FAN_CTRL) | GPIO12 | 50 % from start-up. **Full speed from 60 °C** CPU temperature, back to normal at 52 °C. Set the normal speed with the fan slider on the Device page. |
 | Record button (SW1, CAM_REC) | GPIO4 | Press: start a recording. Press again: stop and save it. Presses within 1 s of the last one are ignored. |
-| Power button (SW2) | GPIO22 | Short press while on: save any recording and shut down. Requires the LTC2954 (U13), an optional part that is not fitted on every board. |
+| Power button (SW2) | GPIO22 (LTC2954 INT) | **Press to switch on.** Short press while on: save any recording, shut down, and switch the board off. Holding it for about 14 s forces the board off without a safe shutdown (use only if the Pi has hung). Requires the LTC2954 (U13). |
+| Power off (PI_KILL) | GPIO5 | Driven low by the Pi at the very end of a power-off, so the LTC2954 switches the whole board off. Never driven during a reboot. |
 
 The LED colours are whatever is fitted on D8/D9; the names come from the schematic. The
 thresholds are in `~/BENEV/board.json`; the battery and shutdown ones are also on the Device
@@ -363,9 +364,15 @@ removed:
 Change the 2 minutes on the Device page (1, 2, 5, 10 or 30 minutes, or never). It also applies
 when the Pi starts on battery. While on battery, updates are not installed.
 
-Without the LTC2954 (U13) the Pi cannot switch the board's power off, so after a shutdown the
-board keeps drawing a little from the battery until power is removed. To start the Pi again,
-switch its power off and on.
+Every power-off ends with the board switching itself off completely: as the last step, after
+all files are saved and the file systems are read-only, the Pi pulls PI_KILL (GPIO5) low and the
+LTC2954 (U13) cuts all rails. The board then draws no power from the battery for the Pi or the
+camera. **To switch it on again, press the power button.** Plugging in USB-C alone does not start
+it. *Restart Pi* keeps the power on.
+
+The step is a systemd shutdown hook (`/usr/lib/systemd/system-shutdown/benev-poweroff`). On a
+board without U13, the PI_KILL line goes nowhere, so the board stays powered after a shutdown until
+power is removed.
 
 Every way of stopping keeps the recording: *Shut down Pi* / *Restart Pi* on the page, the
 power button, running out the battery countdown, an update, and even `sudo reboot` over SSH.
@@ -625,8 +632,8 @@ ssh <user>@benev.local sudo bash benev-install.sh --app-only
 - The accelerometer reads about 1.07 g at rest (a ~65 mg offset of the part).
 - If the fuel gauge (MAX17048) returns corrupted I2C data, this indicates a hardware fault on
   that board rather than a software problem. The app rejects the invalid readings.
-- After *Shut down Pi*, the HAT stays powered until the power button is pressed. The
-  software does not drive Pi_Kill (GPIO5).
+- On a board without the LTC2954 (U13), the HAT stays powered after *Shut down Pi*, and the
+  power button does nothing.
 
 ## Uninstall
 
@@ -636,7 +643,8 @@ sudo nmcli connection delete benev-hotspot
 sudo rm /etc/systemd/system/benev-dashboard.service /etc/systemd/system/benev-wifi.service \
         /etc/systemd/system/benev-update@.service /etc/systemd/system/benev-update.timer \
         /etc/sudoers.d/benev-dashboard /etc/NetworkManager/dnsmasq-shared.d/benev-captive.conf \
-        /etc/avahi/services/benev.service /usr/local/bin/benev-update
+        /etc/avahi/services/benev.service /usr/local/bin/benev-update \
+        /usr/lib/systemd/system-shutdown/benev-poweroff
 sudo rm -r /usr/local/lib/benev /etc/benev /var/lib/benev
 sudo ninja -C /usr/local/src/libcamera-kurokesu/build uninstall && sudo ldconfig
 sudo dkms remove ar0234-rpi-dkms/0.1.2 --all && sudo rm /boot/firmware/overlays/ar0234.dtbo

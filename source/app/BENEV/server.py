@@ -353,7 +353,7 @@ class App:
         except Exception as e:
             log.error("saving the recording on stop failed: %s", e)
         self.camera.shutdown()
-        self.outputs.off()   # the board stays powered after the Pi halts: no fan or LEDs left on
+        self.outputs.off()   # without U13 the board stays powered after the Pi halts: no fan or LEDs left on
         log.info("stopped")
 
 

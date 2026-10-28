@@ -10,7 +10,10 @@
                      back under fan_back_c
   CAM_REC    GPIO4   record button SW1 (R10 pull-up, pressed = low): start / stop a recording
   PWR_SW     GPIO22  power button SW2 through the LTC2954's INT (low pulse >= 32 ms): safe
-                     shutdown. Only works with U13 (LTC2954) fitted.
+                     shutdown. Needs U13 (LTC2954) fitted.
+  PI_KILL    GPIO5   to the LTC2954's KILL (R92, R58 pull-up): pulled low at the very end of a
+                     power-off by system/benev-poweroff.sh, so U13 switches the board off. Not
+                     driven while the Pi runs (low then would switch it off at once).
   BAT_PG     GPIO6   charger PGOOD (low = USB-C power present). After unplug_shutdown_s
                      without it, recordings are saved and the Pi shuts down.
 Pins from the bring-up procedure (Pi_Zero_2W_Cam_Board_Bringup_Procedure_01, J7 pin map).

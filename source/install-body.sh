@@ -152,6 +152,9 @@ install_service() {
     for p in $PORTS; do port_args+=" --port $p"; done
     install -d -m 755 "$LIB_DIR"
     install -m 755 "$PAYLOAD/BENEV/system/spi-realtime.sh" "$LIB_DIR/spi-realtime.sh"
+    # Last step of a power-off: PI_KILL (GPIO5) low, so the LTC2954 switches the board off.
+    install -d -m 755 /usr/lib/systemd/system-shutdown
+    install -m 755 "$PAYLOAD/BENEV/system/benev-poweroff.sh" /usr/lib/systemd/system-shutdown/benev-poweroff
     cat > /etc/systemd/system/benev-dashboard.service <<EOF
 [Unit]
 Description=BENEV recorder web app (http://benev.local)
