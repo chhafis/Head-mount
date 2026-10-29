@@ -20,6 +20,7 @@ import struct
 import sys
 import threading
 import time
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +31,7 @@ from libcamera import ColorSpace, Transform, controls
 
 import edge_boost
 import lens_shading
+from writebehind import WriteBehind
 
 MEDIA = Path(__file__).resolve().parent / "media"
 PREVIEW_WIDTH = 640
@@ -43,6 +45,9 @@ RECORD_MAX_FPS = {(1920, 1200): 25, (1920, 1080): 30, (1280, 720): 60, (960, 600
 CROP_FROM_TOP = os.environ.get("BENEV_ROTATE180") != "1"
 # Whether that is the start (y = 0) of the sensor's coordinates; the overlay's 180-degree mounting flips them.
 SENSOR_CUT_AT_START = os.environ.get("BENEV_CUT_AT_START", "0") == "1"
+VIDEO_QUEUE_BYTES = 48 << 20     # encoded video waiting for the SD card; ~50 s at 8 Mb/s before frames are shed
+BITS_PER_PIXEL = 0.13            # default H.264 bitrate: 1080p30 -> 8.1 Mb/s (the proposal says 6-8)
+BITRATE_LIMITS_MBPS = (2.0, 25.0)   # 25 Mb/s is the hardware encoder's comfortable ceiling
 JPEG_QUALITY = 95
 SHADING_FRAMES = 8              # raw frames averaged for the lens shading calibration
 LENS_FILE = Path(__file__).resolve().parent / "lens-shading.json"
@@ -87,7 +92,13 @@ def even(v):
 
 
 class PreviewOutput(Output):
-    """Takes the hardware MJPEG frames and forwards every `every`-th one (about PREVIEW_FPS)."""
+    """Takes the hardware MJPEG frames and forwards every `every`-th one (about PREVIEW_FPS).
+
+    The frame goes to a sender thread through a one-place mailbox: if the pipe to the server is
+    slow (it is read by a busy Python process) the old frame is replaced by the newer one. Writing
+    to the pipe here would stall the encoder's thread, which also hands the camera its buffers
+    back, and a slow preview would then cost video frames.
+    """
 
     def __init__(self, service):
         super().__init__()
@@ -96,6 +107,9 @@ class PreviewOutput(Output):
         self.count = 0
         self.last = 0.0
         self.fps = 0.0
+        self._cond = threading.Condition()
+        self._mail = None
+        threading.Thread(target=self._send, daemon=True, name="preview-sender").start()
 
     def outputframe(self, frame, keyframe=True, timestamp=None, packet=None, audio=False):
         # Counting frames rather than timing them: frames arriving a hair early must not be dropped.
@@ -106,37 +120,101 @@ class PreviewOutput(Output):
         if self.last:
             self.fps += 0.2 * (1 / (now - self.last) - self.fps)
         self.last = now
-        emit(self.service.status(self.fps), bytes(frame))
+        with self._cond:
+            self._mail = (self.fps, bytes(frame))
+            self._cond.notify()
+
+    def _send(self):
+        while True:
+            with self._cond:
+                while self._mail is None:
+                    self._cond.wait()
+                fps, jpeg = self._mail
+                self._mail = None
+            try:
+                emit(self.service.status(fps), jpeg)
+            except (BrokenPipeError, ValueError, OSError):
+                return   # the server is gone
 
 
-class FrameLoggingOutput(PyavOutput):
-    """The video file plus frames.csv: one row for every frame actually written.
+class MJPEGRateEncoder(MJPEGEncoder):
+    """MJPEGEncoder that writes the real frame rate into the file (picamera2 hard-codes 30)."""
+
+    def __init__(self, bitrate, fps):
+        super().__init__(bitrate)
+        self.fps = fps
+
+    def _send_streams(self, output):
+        output._add_stream("video", "mjpeg", rate=Fraction(self.fps).limit_denominator(1000),
+                           width=self.width, height=self.height)
+
+
+class VideoOutput(PyavOutput):
+    """The video file, and for a session also frames.csv: one row for every frame written.
 
     picamera2 hands outputs the frame's SensorTimestamp relative to the first encoded frame,
     and PyAV uses that as the presentation time, so video time 0 is the first row's t_ns.
+
+    The encoder's polling thread calls outputframe() and, in between, hands the camera its buffers
+    back. If it waited for the SD card here (stalls of 240-580 ms were measured) the camera would
+    run out of buffers and drop whole frames. So outputframe() only queues the frame; a writer
+    thread does the muxing and the file writes (writebehind.py). Only when the card has stopped for
+    so long that the queue is full are frames shed, and then from the next keyframe on, so the
+    video stays decodable; the number is reported.
     """
 
-    def __init__(self, path, fmt, encoder, frames_path, metadata):
+    def __init__(self, path, fmt, encoder=None, frames_path=None, metadata=None):
         super().__init__(str(path), format=fmt)
         self.encoder = encoder
         self.metadata = metadata          # SensorTimestamp (us) -> request metadata, from post_callback
-        self.frames = open(frames_path, "w", buffering=1 << 16)
-        self.frames.write("frame,t_ns,pts_us,exposure_us,analog_gain,digital_gain,colour_temp_k\n")
+        self.frames = None
+        if frames_path is not None:
+            self.frames = open(frames_path, "w", buffering=1 << 16)
+            self.frames.write("frame,t_ns,pts_us,exposure_us,analog_gain,digital_gain,colour_temp_k\n")
         self.n = 0
+        self.writer = WriteBehind("video-writer", max_bytes=VIDEO_QUEUE_BYTES)
+        self.shed = 0                     # frames not written because the queue was full
+        self._shedding = False
+        self.error_callback = lambda e: log(f"video write failed: {e}")
+        self.stats = {}
+
+    def start(self):
+        super().start()
+        self.writer.start()
 
     def outputframe(self, frame, keyframe=True, timestamp=None, packet=None, audio=False):
-        super().outputframe(frame, keyframe, timestamp, packet, audio)
-        if audio or timestamp is None or self.frames.closed:
+        if not self.recording:
             return
-        ts_us = self.encoder.firsttimestamp + timestamp
-        md = self.metadata.get(ts_us, {})
-        self.frames.write(f"{self.n},{ts_us * 1000},{timestamp},{md.get('ExposureTime', '')},"
-                          f"{md.get('AnalogueGain', 0):.3f},{md.get('DigitalGain', 0):.3f},{md.get('ColourTemperature', '')}\n")
-        self.n += 1
+        if audio or packet is not None:      # not used by the hardware encoders: keep it simple and in order
+            self.writer.put(PyavOutput.outputframe, self, frame, keyframe, timestamp, packet, audio, size=len(frame))
+            return
+        if self.writer.full:
+            self._shedding = True
+        if self._shedding:
+            if not keyframe or self.writer.full:
+                self.shed += 1
+                return
+            self._shedding = False
+        row = None
+        if self.frames is not None and timestamp is not None:
+            ts_us = self.encoder.firsttimestamp + timestamp
+            md = self.metadata.get(ts_us, {})   # looked up now: the table only keeps the last few frames
+            row = (f"{self.n},{ts_us * 1000},{timestamp},{md.get('ExposureTime', '')},"
+                   f"{md.get('AnalogueGain', 0):.3f},{md.get('DigitalGain', 0):.3f},{md.get('ColourTemperature', '')}\n")
+            self.n += 1
+        self.writer.put(self._write, frame, keyframe, timestamp, row, size=len(frame))
+
+    def _write(self, frame, keyframe, timestamp, row):
+        PyavOutput.outputframe(self, frame, keyframe, timestamp, None, False)
+        if row is not None and not self.frames.closed:
+            self.frames.write(row)
 
     def stop(self):
+        # The encoder has stopped delivering frames; write what is queued while the file is still open.
+        self.stats = {**self.writer.close(), "frames_shed": self.shed}
         super().stop()
-        self.frames.close()
+        if self.frames is not None:
+            self.frames.close()
 
 
 class CameraService:
@@ -414,7 +492,7 @@ class CameraService:
             self.picam2.set_controls(isp)
         return changes
 
-    def record_start(self, folder=None):
+    def record_start(self, folder=None, bitrate_mbps=None):
         """Record into media/ (single video) or into a session folder (video + frames.csv)."""
         if self.recording:
             raise RuntimeError("already recording")
@@ -422,23 +500,26 @@ class CameraService:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         w, h, fps = self.config["width"], self.config["height"], self.config["fps"]
         if self.config["record_codec"] == "h264":
-            # ~0.4 bit per pixel is visually transparent for H.264; 25 Mb/s is the encoder's comfortable ceiling.
-            bitrate = int(min(25e6, max(8e6, w * h * fps * 0.4)))
+            if bitrate_mbps:
+                mbps = min(BITRATE_LIMITS_MBPS[1], max(BITRATE_LIMITS_MBPS[0], float(bitrate_mbps)))
+            else:   # automatic: about 0.13 bit per pixel (8 Mb/s for 1080p30), within the encoder's limits
+                mbps = min(BITRATE_LIMITS_MBPS[1], max(BITRATE_LIMITS_MBPS[0], w * h * fps * BITS_PER_PIXEL / 1e6))
+            bitrate = int(mbps * 1e6)
             encoder = H264Encoder(bitrate=bitrate, repeat=True, iperiod=max(1, round(fps)), profile="high")
             ext, fmt = "mp4", "mp4"
         else:
             bitrate = int(min(80e6, w * h * fps * 1.5))
-            encoder = MJPEGEncoder(bitrate=bitrate)
+            encoder = MJPEGRateEncoder(bitrate, fps)
             ext, fmt = "mkv", "matroska"
         if folder:
             path = Path(folder) / f"video.{ext}"
-            output = FrameLoggingOutput(path, fmt, encoder, Path(folder) / "frames.csv", self.recent_metadata)
+            output = VideoOutput(path, fmt, encoder, Path(folder) / "frames.csv", self.recent_metadata)
         else:
             path = MEDIA / f"video-{stamp}.{ext}"
-            output = PyavOutput(str(path), format=fmt)
+            output = VideoOutput(path, fmt)
         self.picam2.start_encoder(encoder, output, name="main")
-        self.recording = {"encoder": encoder, "path": path, "file": path.name, "codec": self.config["record_codec"],
-                          "bitrate": bitrate, "t0": time.monotonic()}
+        self.recording = {"encoder": encoder, "output": output, "path": path, "file": path.name,
+                          "codec": self.config["record_codec"], "bitrate": bitrate, "t0": time.monotonic()}
         log(f"recording {path} ({self.config['record_codec']}, {bitrate / 1e6:.1f} Mb/s)")
         return {"file": path.name, "bitrate": bitrate, "codec": self.config["record_codec"]}
 
@@ -449,8 +530,9 @@ class CameraService:
         self.picam2.stop_encoder(rec["encoder"])
         seconds = round(time.monotonic() - rec["t0"], 1)
         size = rec["path"].stat().st_size
-        log(f"saved {rec['path']}: {seconds} s, {size / 1e6:.1f} MB")
-        return {"file": rec["file"], "seconds": seconds, "bytes": size}
+        stats = rec["output"].stats
+        log(f"saved {rec['path']}: {seconds} s, {size / 1e6:.1f} MB, writer {stats}")
+        return {"file": rec["file"], "seconds": seconds, "bytes": size, "writer": stats}
 
     def still(self, raw):
         MEDIA.mkdir(exist_ok=True)
@@ -497,7 +579,7 @@ class CameraService:
         with MappedArray(request, "main") as m:
             edge_boost.apply_rgb(maps, m.array, size)
 
-    def shading_capture(self):
+    def shading_capture(self, frames=SHADING_FRAMES, settle=20):
         """Average raw flat-field frames at full sensor size -> lens shading tables (lens_shading.py).
         Full size so the tables cover the whole sensor; libcamera crops them for smaller modes."""
         if self.recording:
@@ -514,11 +596,11 @@ class CameraService:
         try:
             self.picam2.configure(cfg)
             self.picam2.start()
-            for _ in range(20):   # let exposure and white balance settle on the flat field
+            for _ in range(settle):   # let exposure and white balance settle on the flat field
                 self.picam2.capture_metadata()
             raw_cfg = self.picam2.camera_config["raw"]
             fmt, (w, h) = raw_cfg["format"], raw_cfg["size"]
-            for _ in range(SHADING_FRAMES):
+            for _ in range(frames):
                 request = self.picam2.capture_request()
                 try:
                     img, depth = lens_shading.unpack_raw(request.make_array("raw"), fmt, w, h)
@@ -578,11 +660,12 @@ def main():
                 if name == "still":
                     reply["result"] = service.still(bool(cmd.get("raw")))
                 elif name == "record_start":
-                    reply["result"] = service.record_start(cmd.get("dir"))
+                    reply["result"] = service.record_start(cmd.get("dir"), cmd.get("bitrate_mbps"))
                 elif name == "record_stop":
                     reply["result"] = service.record_stop()
                 elif name == "shading_capture":
-                    reply["result"] = service.shading_capture()
+                    reply["result"] = service.shading_capture(int(cmd.get("frames") or SHADING_FRAMES),
+                                                              int(cmd.get("settle") or 20))
                 elif name == "live":
                     reply["result"] = service.set_live(cmd["controls"])
                 elif name == "edge_map":

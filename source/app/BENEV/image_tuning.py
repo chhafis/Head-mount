@@ -10,7 +10,10 @@ to each step at the previous gain, then the gain rises at that fixed time. The s
 "normal" mode lets the exposure time reach 30 ms before it raises the gain, which smears
 anything that moves (a head turning at 100 deg/s moves the 170 degree picture ~11 pixels per
 10 ms). The "custom" mode here holds the exposure time at max_exposure_ms and raises the gain
-instead, and only beyond max_gain lets the exposure time grow again, up to the frame time.
+instead. With hard_limits (the default) that is final: past max_gain the ISP's digital gain brightens
+the picture and the exposure time stays at max_exposure_ms, so a recording never has a longer exposure
+(more blur) or more analogue gain than the limits say. Without it the exposure time may grow again
+beyond max_gain, up to the frame time, which keeps dim scenes brighter at the cost of motion blur.
 
 Flicker. Lamps on AC mains flicker at twice the mains frequency (100 Hz on 50 Hz mains). An
 exposure that is a whole number of flicker periods (10 ms, 20 ms) sees every frame the same
@@ -28,6 +31,7 @@ DEFAULTS = {
     "ev": 0.0,                  # exposure compensation, stops
     "mains_hz": 50,             # mains frequency, for flicker-free exposures; 0 = off
     "metering": "matrix",       # centre-weighted | matrix | spot
+    "hard_limits": True,        # never exceed max_exposure_ms / max_gain, even in a dim scene (it just gets darker)
     "highlight_protect": False, # also keep bright areas (windows, lamps) from clipping
     "contrast_enhance": True,   # the ISP's adaptive contrast enhancement
     "edge_boost": 0.0,          # extra gain for edges the lens leaves dark (edge_boost.py); 0 = off
@@ -35,7 +39,7 @@ DEFAULTS = {
 RANGES = {"max_exposure_ms": (1.0, 33.0), "max_gain": (1.0, 16.0), "sharpness": (0.0, 4.0), "edge_boost": (0.0, 1.0),
           "contrast": (0.5, 2.0), "saturation": (0.0, 2.0), "ev": (-2.0, 2.0)}
 CHOICES = {"metering": ("centre-weighted", "matrix", "spot"), "mains_hz": (0, 50, 60)}
-BOOLEANS = ("highlight_protect", "contrast_enhance")
+BOOLEANS = ("highlight_protect", "contrast_enhance", "hard_limits")
 
 
 def validate(changes):
@@ -77,9 +81,10 @@ def exposure_mode(cfg, frame_ms):
     gains = [g for g in (1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0) if g < top] + [top]
     shutter = [100.0] + [cap] * len(gains)          # time to cap at gain 1, then gain rises at cap
     gain = [1.0] + gains
-    # Out of gain: let the exposure time grow again, but never past the frame time.
-    shutter.append(longest)
-    gain.append(top)
+    if not cfg.get("hard_limits", True):
+        # Out of gain: let the exposure time grow again, but never past the frame time.
+        shutter.append(longest)
+        gain.append(top)
     return {"shutter": [round(s) for s in shutter], "gain": gain}
 
 

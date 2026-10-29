@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 MEDIA = HERE / "media"
 SETTINGS_FILE = HERE / "camera.json"
 DEFAULT_SETTINGS = {"width": 1920, "height": 1080, "fps": 30, "raw": False, "front_axis": "+x", "rotate180": False,
-                    "image": {}}
+                    "bitrate_mbps": None, "image": {}}
 IDLE_STOP_S = 5.0
 START_TIMEOUT_S = 20.0
 # The worker's libcamera uses a copy of the sensor's tuning file (camera-tuning.json) instead of

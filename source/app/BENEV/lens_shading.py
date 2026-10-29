@@ -195,6 +195,19 @@ def lit_centre_offset(g):
     return [int(round(dx)), int(round(dy))]
 
 
+def centre_advice(stats, rotated=False):
+    """How far the lit area is from the sensor centre, for the lens centring check and the calibration:
+    {"offset_px": [dx, dy], "offset_mm", "centred", "where"}; where is None when the direction is unknown."""
+    dx, dy = stats.get("lit_centre_offset_px") or (0, 0)
+    worst = max(abs(dx), abs(dy))
+    where = None
+    if not rotated:   # which way is "down" depends on how the picture is turned: say only how far
+        side = [name for name, v in (("right", dx), ("left", -dx), ("bottom", dy), ("top", -dy)) if v >= OFFCENTRE_PX]
+        where = " and ".join(side) or None
+    return {"offset_px": [dx, dy], "offset_mm": round(worst * PIXEL_UM / 1000, 2), "centred": worst < OFFCENTRE_PX,
+            "where": where}
+
+
 def assess(stats, rotated=False):
     """-> (problems that make the measurement unusable, warnings). Thresholds from synthetic
     tests: a smooth fall-off fits within ~3 %, one bright cell in view shows as ~20 %."""

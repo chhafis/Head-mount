@@ -14,6 +14,12 @@ find "$stage" \( -name __pycache__ -o -name '*.pyc' \) -prune -exec rm -rf {} +
 # GitHub workflow) or, for local builds, git's description (dev builds count as older).
 version=${BENEV_VERSION:-$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo dev)}
 printf '%s\nbuilt %s\n' "$version" "$(date -u +%Y-%m-%dT%H:%MZ)" > "$stage/BENEV/VERSION"
+case "$version" in
+    *-dirty|dev)
+        echo "WARNING: this is a development build ($version): it has changes that are not committed." >&2
+        echo "         Do not ship it. Release builds come from a tag: git tag vX.Y.Z && git push origin vX.Y.Z" >&2
+        ;;
+esac
 # Builds know their repository, so installed boards update from it: BENEV_OTA_REPO (set by
 # the GitHub workflow), else the GitHub repository of this checkout's git origin.
 repo=${BENEV_OTA_REPO:-}

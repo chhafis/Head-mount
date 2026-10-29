@@ -678,6 +678,7 @@ const camPhoto = document.getElementById("cam-photo");
 const camRecord = document.getElementById("cam-record");
 const camRaw = document.getElementById("cam-raw");
 const camRotate = document.getElementById("cam-rotate");
+const camBitrate = document.getElementById("cam-bitrate");
 let camStatus = null;
 let camBusy = false;          // a camera command is in flight
 let camEditing = false;       // the user changed the mode selectors but has not applied them
@@ -760,6 +761,7 @@ camApply.addEventListener("click", async () => {
 });
 
 camRaw.addEventListener("change", () => camCommand({ action: "settings", raw: camRaw.checked }));
+camBitrate.addEventListener("change", () => camCommand({ action: "settings", bitrate_mbps: Number(camBitrate.value) }));
 camRotate.addEventListener("change", async () => {
   const camera2 = camRotate.value === "2";
   await camCommand({ action: "settings", rotate180: camera2 }, "Switching camera, it restarts…");
@@ -853,6 +855,8 @@ function renderImage(c) {
   if (document.activeElement !== sharp) setSelectNear(sharp, c.image.sharpness);
   if (document.activeElement !== meter) meter.value = c.image.metering;
   if (document.activeElement !== ce) ce.checked = c.image.contrast_enhance;
+  const hard = document.getElementById("img-hard");
+  if (document.activeElement !== hard) hard.checked = c.image.hard_limits !== false;
   if (!evDragging && !evTimer) {
     document.getElementById("img-ev").value = String(c.image.ev);
     document.getElementById("img-ev-value").textContent = fmtEv(c.image.ev);
@@ -922,6 +926,7 @@ evSlider.addEventListener("dblclick", () => {
   sendEv(0);
 });
 document.getElementById("img-ce").addEventListener("change", (ev) => imageAction({ action: "image", contrast_enhance: ev.target.checked }));
+document.getElementById("img-hard").addEventListener("change", (ev) => imageAction({ action: "image", hard_limits: ev.target.checked }));
 document.getElementById("img-reset").addEventListener("click", () => imageAction({ action: "image_reset" }));
 
 // ---------- lens shading correction (lens_shading.py)
@@ -974,6 +979,35 @@ async function lensAction(action) {
 }
 
 document.getElementById("lens-calibrate").addEventListener("click", () => lensAction("lens_calibrate"));
+
+// Quick check for fitting the lens: where is the lit area on the sensor? (nothing is saved; press again after moving the lens)
+document.getElementById("lens-centre").addEventListener("click", async (ev) => {
+  const button = ev.currentTarget, msg = document.getElementById("lens-msg");
+  button.disabled = true;
+  lensBusy = true;
+  msg.classList.remove("error");
+  msg.textContent = "Measuring… keep the diffuser over the lens.";
+  try {
+    const r = (await postJson("/api/camera", { action: "lens_centre" })).result;
+    const [dx, dy] = r.offset_px;
+    if (r.problems.length) {
+      msg.textContent = `Not measured: ${r.problems.join(" ")}`;
+      msg.classList.add("error");
+    } else if (r.centred) {
+      msg.textContent = `Lens is centred: the lit area is ${Math.abs(dx)} px sideways and ${Math.abs(dy)} px up/down from the sensor centre (${r.offset_mm} mm, limit 100 px).`;
+    } else {
+      msg.textContent = `Lens is NOT centred: the lit area is ${Math.abs(dx)} px sideways and ${Math.abs(dy)} px up/down from the sensor centre (${r.offset_mm} mm)` +
+        `${r.where ? `, towards the ${r.where} of the picture` : ""}. Loosen the lens holder, move the lens until both are under 100 px, tighten, and check again.`;
+      msg.classList.add("error");
+    }
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.classList.add("error");
+  } finally {
+    lensBusy = false;
+    button.disabled = false;
+  }
+});
 document.getElementById("lens-reset").addEventListener("click", (ev) => {
   if (secondTap(ev.currentTarget, "Tap again to remove")) lensAction("lens_reset");
 });
@@ -1000,6 +1034,7 @@ function updateCamera(c) {
   if (s) {
     camRaw.checked = Boolean(s.raw);
     camRotate.value = s.rotate180 ? "2" : "1";
+    camBitrate.value = String(s.bitrate_mbps || 0);
   }
 
   const m = c.camera;

@@ -53,7 +53,7 @@ phones cannot update over the old app:
 |---|---|
 | Raspberry Pi Zero 2 W | with the BENEV HAT (Pi Zero 2W Cam Board 1.0) |
 | Camera | Arducam B0353 (AR0234), ribbon cable in the **Pi's own** camera socket |
-| microSD card | 16 GB or more. Video is up to 25 Mb/s (at most ~190 MB per minute; calm scenes use much less) |
+| microSD card | 16 GB or more, a good A1/A2 card (see [Recording reliability](#recording-reliability)). Video is 8 Mb/s at 1080p30 by default (about 60 MB per minute), up to 25 Mb/s if chosen |
 | OS | **Raspberry Pi OS Bookworm**, Lite or Desktop. Tested on 32-bit; 64-bit uses the same steps but has not been tried. Trixie is not supported. |
 | Internet on the Pi | Wi-Fi is fine; several hundred MB is downloaded |
 | Time | about **1 hour 15 minutes**, most of it compiling libcamera |
@@ -213,7 +213,9 @@ holds the same files):
 | `orientation.csv` | `t_ns,qw,qx,qy,qz,roll_deg,pitch_deg,yaw_deg`: fused orientation for every IMU sample. The quaternion rotates IMU-frame vectors into the earth frame (z up, x magnetic north). |
 | `mag.csv` | `t_ns,mx_uT,my_uT,mz_uT,mx_cal_uT,my_cal_uT,mz_cal_uT`: magnetometer at ~25 Hz, raw (sensor axes) and calibrated (IMU axes; equal to raw if not calibrated). |
 | `calibration.json` | the calibration in effect for this recording (if any) |
-| `session.json` | start time (local and Unix), camera mode, IMU settings, which IMU axis the camera faces, counts, measured IMU rate, largest IMU gap, FIFO overruns and data-quality counters (`imu_fifo_errors`; `ts_jump` = samples the IMU itself skipped) |
+| `session.json` | start time (local and Unix), camera mode, IMU settings, which IMU axis the camera faces, counts, measured IMU rate, largest IMU gap, FIFO overruns and data-quality counters (`imu_fifo_errors`; `ts_jump` = samples the IMU itself skipped), the `video_quality` summary (below), the image settings, the lens shading calibration summary and, if present, the lens intrinsics |
+| `lens_intrinsics.json` | only if the head mount has been calibrated for it: focal length, optical centre, distortion and field of view (see [Lens intrinsics](#lens-intrinsics-focal-length-distortion-field-of-view)) |
+| `edge_gain.json` | the lens's edge gain map, for `tools/edge_boost_video.py` (see Edge brightening) |
 
 **All `t_ns` are on the same clock** (Linux `CLOCK_MONOTONIC`, nanoseconds), so the files
 line up by timestamp directly. To find the IMU data for a frame, look up its `t_ns` in
@@ -238,7 +240,7 @@ priority 20 (they sleep between reads, so they take very little CPU).
 | Fan & LEDs | The automatic outputs with what they are doing and why (fan, power-on, record and battery-low LEDs); the fan's normal speed; LED2 brightness and the spare green LED by hand. |
 | Power & buttons | USB-C power or battery, the shutdown countdown, how long to run on battery before shutting down, the battery-low threshold, and how often each button was pressed (to test them). |
 | Software update | Installed version, the newest release on GitHub, *Check for updates*, *Install*, and *Restart now* when an update changed boot settings. |
-| Camera | Live view, **Take photo**, a plain video **Record / Stop** (video only), resolution and frame rate for both, optional raw DNG with photos, the **Camera** selector: *Camera 1* is the standard orientation and *Camera 2* turns the picture by 180° (the lens and edge calibrations follow the orientation; the setting is saved with every recording), and the list of photos and plain videos. The *Lens shading correction* box calibrates the lens. |
+| Camera | Live view, **Take photo**, a plain video **Record / Stop** (video only), resolution and frame rate for both, the video bitrate, optional raw DNG with photos, the **Camera** selector: *Camera 1* is the standard orientation and *Camera 2* turns the picture by 180° (the lens and edge calibrations follow the orientation; the setting is saved with every recording), and the list of photos and plain videos. The *Lens shading correction* box calibrates the lens and has **Check lens centring** (see below). |
 | Battery | MAX17048: charge %, voltage, charge rate, alert, 1-hour history. |
 | Motion | LSM6DSV16B: accelerometer, gyroscope, roll/pitch, temperature. |
 | Magnetic field | MMC5983MA, offset-corrected X/Y/Z and magnitude. |
@@ -248,8 +250,11 @@ priority 20 (they sleep between reads, so they take very little CPU).
 
 - **Photos**: full 1920×1200 sensor readout, high-quality denoise, JPEG quality 95, plus a
   raw DNG if ticked.
-- **Video**: hardware H.264 High profile (up to 25 Mb/s) in `.mp4`. At 1920×1200 it is MJPEG
-  in `.mkv`, because the Pi's H.264 encoder cannot take that size.
+- **Video**: hardware H.264 High profile in `.mp4`, GOP 30, no B-frames, 8-bit 4:2:0. The bitrate is
+  automatic by default: about 0.13 bit per pixel, which is **8 Mb/s at 1920×1080, 30 fps**. Choose
+  another value (2 to 25 Mb/s) with *Video bitrate* in the Camera box of the Device page; it is saved
+  and used for the Record page too. At 1920×1200 it is MJPEG in `.mkv` (the Pi's H.264 encoder cannot
+  take that size) and the file states the real frame rate.
 - Frame rates are limited to what records with **no dropped frames** (measured on the Zero 2 W):
 
 | Resolution | Max fps | Field of view |
@@ -258,6 +263,48 @@ priority 20 (they sleep between reads, so they take very little CPU).
 | 1920×1080 | 30 | crop: Camera 1 keeps the lower 1080 lines of the 1920×1200 readout (120 lines are cut from the top, where its lens gives the least light); Camera 2 uses the sensor's centred 1080-line mode |
 | 1280×720 | 60 | crop |
 | 960×600 | 100 | full (2×2 binned) |
+
+### Recording reliability
+
+A recording must not lose frames or IMU samples, so nothing that waits for the SD card runs on a
+time-critical thread. The Pi Zero 2 W's SD card stalls now and then for a few hundred milliseconds
+(240–580 ms measured); two things used to depend on it directly:
+
+- **Video.** The hardware encoder's thread wrote each frame to the file and, in between, handed the
+  camera its buffers back. A stalled write meant the camera ran out of buffers and dropped whole
+  frames (gaps of 66–333 ms). Frames are now put into a queue (up to 48 MB, about 50 s at 8 Mb/s) and
+  written by a thread of their own; the encoder's thread never waits for the card. The live
+  preview frames likewise go to the server through a one-place mailbox.
+- **IMU.** The sensor's FIFO holds only about 125 ms at 960 Hz. The thread that empties it also wrote
+  `imu.csv` and `orientation.csv`, so a stalled write overflowed the FIFO (gaps of 27–188 ms). It now
+  only collects rows; a writer thread formats and writes them.
+
+Only if the card stops for so long that the queue is full are video frames shed, starting from the
+next keyframe so the file stays playable; the number is recorded.
+
+Every recording reports what happened in `session.json`:
+
+```
+"video_quality": {
+  "frames_written": 4731, "frames_lost": 0, "frame_gaps_over_1_5_periods": 0,
+  "largest_frame_gap_ms": 33.4, "frame_period_ms": 33.33,
+  "exposure_max_ms": 10.0, "analog_gain_max": 5.1, "total_gain_max": 5.4,
+  "bitrate_mbps": 8.1 },
+"writers": { "video": {"max_queue_mb": 0.4, "longest_write_ms": 310, "frames_shed": 0, ...},
+             "sensors": {"max_queue_mb": 0.1, "longest_write_ms": 280, ...} },
+"counts": { ..., "imu_max_gap_ms": 1.2, "imu_fifo_overruns": 0 }
+```
+
+`frames_lost` counts the frame periods missing between consecutive frames in `frames.csv`;
+`longest_write_ms` shows how long the card stalled. Use a good SD card (A1/A2 rated, from a known
+brand): a slow card shows up as long writes, and the queue only hides that up to its size.
+
+**Exposure and gain limits.** *Longest exposure* (default 10 ms, one flicker period on 50 Hz mains)
+and the gain limit (8) are hard limits by default (*Never exceed the longest exposure and the gain
+limit* on the Device page): in a dim scene the picture gets darker (the ISP's digital gain
+brightens it a little) instead of the exposure growing to 30 ms with more motion blur. Untick it
+to let the exposure grow again beyond the gain limit. The values actually used are in
+`video_quality` (`exposure_max_ms`, `analog_gain_max`, `total_gain_max`).
 
 ## Lens shading correction
 
@@ -309,6 +356,12 @@ colour tables itself.
   whose chief ray angle suits the sensor, and a clear light path (no hood, filter or barrel
   clipping the view), reduce the remaining vignetting.
 
+  **Check lens centring** (button in the *Lens shading correction* box, with the white diffuser over
+  the lens as for a calibration) measures this in about 5 seconds without saving anything, and
+  can be pressed again after each adjustment. It says "centred" when the lit area is within
+  100 px of the sensor centre (0.3 mm), otherwise how far and, for Camera 1, in which direction.
+  Fit and check the lens of every head mount before it ships, then calibrate the lens shading.
+
 ### Edge brightening
 
 For lenses whose image circle is smaller than the sensor, the **Edge brightening** slider (Record
@@ -334,6 +387,66 @@ lowered or turned off with the slider.
   circle, or cropping the picture, resolves this.
 - **Requirement.** The installer compiles a small routine (`libedgeboost.so`) with `gcc`. If it is
   unavailable the slider reports that edge brightening is not available.
+
+## Lens intrinsics (focal length, distortion, field of view)
+
+For computer vision the camera's geometry is needed: focal length, optical centre, distortion and the
+true field of view. The recorder cannot measure it by itself (it needs a printed checkerboard), so
+it is done once per lens on a PC with `tools/calibrate_intrinsics.py`:
+
+1. Print a checkerboard (for example 9×6 inner corners, 25 mm squares) on a flat, rigid board.
+2. With the head mount, take 20–30 pictures with *Take photo* on the Device page (1920×1200):
+   the board at different distances (from 10 to 40 cm), with its corners and edges reaching the
+   corners and edges of the picture, and at different angles. Leave *Edge brightening* off.
+3. Copy the photos from `~/BENEV/media/` to a PC and run
+   `python calibrate_intrinsics.py PHOTO_FOLDER --corners 9x6 --square-mm 25 --circle-px 1760 -o lens-intrinsics.json`
+   (`pip install opencv-python-headless numpy`; `--circle-px` is the diameter of the lit image
+   circle, which gives the lens's own field of view).
+4. Copy `lens-intrinsics.json` to the head mount as `~/BENEV/lens-intrinsics.json`.
+
+Every recording then contains `lens_intrinsics.json` and, in `session.json`, `lens_intrinsics` with the
+field of view. The file has the camera matrix `K` and the four fisheye distortion coefficients
+`D` of OpenCV's fisheye model (`cv2.fisheye`), for the 1920×1200 full frame. A 1920×1080 recording is that
+frame with 120 lines removed, from the top for Camera 1 and 60 from each end for Camera 2, so subtract
+120 (Camera 1) or 60 (Camera 2) from the principal point's y. The tool reports the reprojection error (below
+1 px is good); the field of view of the frame is `n/a` where the frame lies outside the lens's image
+circle. Tested here against a synthetic lens: focal length and centre to 0.1 px, field of view to 0.1°.
+
+## Timing model: clocks and synchronisation
+
+Everything in a recording is on **one clock**, Linux `CLOCK_MONOTONIC` in nanoseconds (`t_ns` in every file):
+
+- **Video frames.** The sensor's start-of-exposure timestamp for each frame (`frames.csv`, `t_ns`).
+- **IMU.** The LSM6DSV16B stamps every sample with a counter on its own oscillator. The recorder reads
+  the FIFO 50 times a second and notes the host time right after each read. Over the last two
+  minutes of these (counter, host time) pairs it learns the counter's true period, and takes the pairs
+  with the smallest latency as the offset (reading latency can only make a host time later), so
+  every sample gets a host-clock time without depending on when it was read (`motion.ClockMap`).
+  Frame-to-IMU alignment measured by a reviewer: median 0.26 ms.
+- **Magnetometer.** Stamped with the host clock at the midpoint of its measurement (about 25 Hz).
+- **Rates.** The IMU is configured at 960 Hz, the setting nearest to 1 kHz that the part offers (its rates
+  are 480, 960, 1920 Hz ...). Against the host clock it measures 952.9 Hz; the exact rate of each
+  recording is in `session.json` (`imu_rate_hz`), and the timestamps are the measured ones, so no
+  resampling is needed.
+- **No hardware sync pulse.** There is no common trigger line between the sensor and the IMU on
+  this board; synchronisation is by timestamps on the common clock as described. The
+  residual error is the host-time jitter of a FIFO read (below 1 ms) and the exposure start offset
+  of the sensor, which `frames.csv` states exactly.
+- **Data over USB-C.** The USB-C port of the HAT carries power only (its D+/D− lines go to test points,
+  not to the Pi); recordings are collected over Wi-Fi (one zip per recording from the Record page).
+
+## Before a head mount ships (checklist)
+
+1. Install a **released** version (`v1.x.y` on the Device page; a version ending in `-dirty` or `dev`
+   is a development build with uncommitted changes and must not be shipped; `build.sh` warns).
+2. Fit the lens, then **Check lens centring** until both offsets are below 100 px; tighten it.
+3. **Calibrate the lens shading** with an even white diffuser (unevenness below 10 %); check the
+   hotspot password is on the unit's label.
+4. **Calibrate the IMU and magnetometer** where it will be used.
+5. Make **lens intrinsics** (above) and copy them to the unit.
+6. Record a test take of 15 minutes or more at the shipping settings. In `session.json` check
+   `video_quality.frames_lost` = 0, `counts.imu_fifo_overruns` = 0, `counts.imu_max_gap_ms` below 5,
+   and `exposure_max_ms` / `analog_gain_max` within the limits.
 
 ## LEDs, fan and buttons
 
@@ -382,8 +495,8 @@ power button, running out the battery countdown, an update, and even `sudo reboo
 At power-on:
 
 1. The head mount joins a **saved Wi-Fi network** if one is in range (within about a minute).
-2. If none is, it starts the hotspot **"Benev AI"** (open, no password).
-3. Join "Benev AI" with your phone. The phone shows a *Sign in to network* page, or you
+2. If none is, it starts the hotspot **"Benev AI"**, protected by a password.
+3. Join "Benev AI" with your phone (the password is on the Wi-Fi page of a head mount that is on your network, and printed by the installer; see below). The phone shows a *Sign in to network* page, or you
    open any `http://` address. You land on the **Wi-Fi page**.
 4. Tap your network, type its password, *Connect*. The head mount leaves the hotspot and
    joins that network, so your phone drops off "Benev AI". Connect the phone to the same
@@ -404,15 +517,17 @@ Later:
   pick a network or tap *Use saved Wi-Fi*.
 - **Forget** removes a saved network.
 
-The hotspot is **open** by default, so anyone nearby can join it and use the recorder. To
-give it a password, edit `/etc/benev/wifi.json` on the Pi:
-```
-{
-  "hotspot_ssid": "Benev AI",
-  "hotspot_password": "at-least-8-characters"
-}
-```
-then `sudo systemctl restart benev-wifi`. While the hotspot runs, every DNS name points at
+**The hotspot has a password.** Anyone who joins the hotspot can start, stop and delete recordings,
+so the installer gives every head mount its own random 10-character password (WPA2), also on
+head mounts that had an open hotspot before. Find it:
+
+- on the **Wi-Fi page** (*Hotspot* card), where it can also be changed and the name too (a change
+  applies the next time the hotspot starts, so that nobody on it is dropped), or
+- in `/etc/benev/wifi.json` on the head mount, or in the installer's output when it runs.
+
+For a batch of head mounts, note each password on the unit's label (or a QR code `WIFI:T:WPA;S:Benev AI;P:<password>;;`).
+An open hotspot is kept only if `"hotspot_open": true` is set in `/etc/benev/wifi.json`
+(with `"hotspot_password": ""`), then `sudo systemctl restart benev-wifi`. While the hotspot runs, every DNS name points at
 the head mount; that is what makes phones open the setup page. Nothing is forwarded to the
 internet.
 

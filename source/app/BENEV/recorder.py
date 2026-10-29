@@ -24,6 +24,7 @@ import zipfile
 from pathlib import Path
 
 import lens_shading
+from writebehind import WriteBehind
 
 log = logging.getLogger("dashboard")
 
@@ -31,12 +32,20 @@ FORMAT_VERSION = 1
 
 
 class SessionLog:
-    """Open CSV writers for one session; written from the motion and sampler threads."""
+    """Open CSV writers for one session; written from the motion and sampler threads.
+
+    Those threads must never wait for the SD card: the IMU reader has about 125 ms to empty the
+    sensor's FIFO. So they only collect rows; batches go to a writer thread (writebehind.py) that
+    formats and writes them.
+    """
+
+    IMU_BATCH = 32      # samples per job (~34 ms at 953 Hz)
+    MAG_BATCH = 4
 
     def __init__(self, folder):
         self.folder = Path(folder)
-        self.imu_f = open(self.folder / "imu.csv", "w", buffering=1 << 20)
-        self.ori_f = open(self.folder / "orientation.csv", "w", buffering=1 << 20)
+        self.imu_f = open(self.folder / "imu.csv", "w", buffering=1 << 16)
+        self.ori_f = open(self.folder / "orientation.csv", "w", buffering=1 << 16)
         self.mag_f = open(self.folder / "mag.csv", "w", buffering=1 << 16)
         self.imu_f.write("t_ns,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\n")
         self.ori_f.write("t_ns,qw,qx,qy,qz,roll_deg,pitch_deg,yaw_deg\n")
@@ -45,6 +54,10 @@ class SessionLog:
         self.imu_first = self.imu_last = None
         self.max_gap_ns = 0
         self.closed = False
+        self.writer = WriteBehind("session-writer", max_bytes=256 << 20)
+        self.writer.start()
+        self._imu_rows, self._mag_rows = [], []
+        self._lock = threading.Lock()   # the motion and sampler threads both submit batches
 
     def imu(self, t, a, g, q):
         if self.closed:
@@ -55,23 +68,84 @@ class SessionLog:
             self.imu_first = t
         self.imu_last = t
         self.imu_n += 1
-        self.imu_f.write(f"{t},{a[0]:.5f},{a[1]:.5f},{a[2]:.5f},{g[0]:.4f},{g[1]:.4f},{g[2]:.4f}\n")
-        q0, q1, q2, q3 = q
-        roll = math.degrees(math.atan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2)))
-        pitch = math.degrees(math.asin(max(-1.0, min(1.0, 2 * (q0 * q2 - q3 * q1)))))
-        yaw = math.degrees(math.atan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3)))
-        self.ori_f.write(f"{t},{q0:.6f},{q1:.6f},{q2:.6f},{q3:.6f},{roll:.3f},{pitch:.3f},{yaw:.3f}\n")
+        self._imu_rows.append((t, a, g, q))
+        if len(self._imu_rows) >= self.IMU_BATCH:
+            rows, self._imu_rows = self._imu_rows, []
+            self.writer.put(self._write_imu, rows, size=len(rows) * 300)
+
+    def _write_imu(self, rows):
+        imu_lines, ori_lines = [], []
+        for t, a, g, q in rows:
+            imu_lines.append(f"{t},{a[0]:.5f},{a[1]:.5f},{a[2]:.5f},{g[0]:.4f},{g[1]:.4f},{g[2]:.4f}\n")
+            q0, q1, q2, q3 = q
+            roll = math.degrees(math.atan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2)))
+            pitch = math.degrees(math.asin(max(-1.0, min(1.0, 2 * (q0 * q2 - q3 * q1)))))
+            yaw = math.degrees(math.atan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3)))
+            ori_lines.append(f"{t},{q0:.6f},{q1:.6f},{q2:.6f},{q3:.6f},{roll:.3f},{pitch:.3f},{yaw:.3f}\n")
+        self.imu_f.write("".join(imu_lines))
+        self.ori_f.write("".join(ori_lines))
 
     def mag(self, t, raw, cal):
         if self.closed:
             return
         self.mag_n += 1
-        self.mag_f.write(f"{t},{raw[0]:.3f},{raw[1]:.3f},{raw[2]:.3f},{cal[0]:.3f},{cal[1]:.3f},{cal[2]:.3f}\n")
+        with self._lock:
+            self._mag_rows.append((t, raw, cal))
+            if len(self._mag_rows) < self.MAG_BATCH:
+                return
+            rows, self._mag_rows = self._mag_rows, []
+        self.writer.put(self._write_mag, rows, size=len(rows) * 150)
+
+    def _write_mag(self, rows):
+        self.mag_f.write("".join(
+            f"{t},{r[0]:.3f},{r[1]:.3f},{r[2]:.3f},{c[0]:.3f},{c[1]:.3f},{c[2]:.3f}\n" for t, r, c in rows))
 
     def close(self):
+        """Write the rest, then close the files. -> the writer's statistics."""
         self.closed = True
+        if self._imu_rows:
+            rows, self._imu_rows = self._imu_rows, []
+            self.writer.put(self._write_imu, rows)
+        with self._lock:
+            rows, self._mag_rows = self._mag_rows, []
+        if rows:
+            self.writer.put(self._write_mag, rows)
+        stats = self.writer.close()
         for f in (self.imu_f, self.ori_f, self.mag_f):
             f.close()
+        return stats
+
+
+def _video_quality(frames_csv, fps, video_bytes, duration_s):
+    """What a reviewer wants to know about the video, from frames.csv: frames lost, the longest gap,
+    exposure and gain actually used, and the bitrate. None if frames.csv cannot be read."""
+    times, exposure, again, total = [], [], [], []
+    try:
+        with open(frames_csv) as f:
+            next(f, None)
+            for line in f:
+                p = line.rstrip("\n").split(",")
+                times.append(int(p[1]))
+                if p[3]:
+                    exposure.append(int(p[3]))
+                    again.append(float(p[4]))
+                    total.append(float(p[4]) * max(float(p[5]), 1.0))
+    except (OSError, ValueError, IndexError):
+        return None
+    if len(times) < 2 or not fps:
+        return None
+    period = 1e9 / fps
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    lost = sum(max(0, round(g / period) - 1) for g in gaps if g > 1.5 * period)
+    out = {"frames_written": len(times), "frames_lost": lost,
+           "frame_gaps_over_1_5_periods": sum(1 for g in gaps if g > 1.5 * period),
+           "largest_frame_gap_ms": round(max(gaps) / 1e6, 1), "frame_period_ms": round(period / 1e6, 2)}
+    if exposure:
+        out.update({"exposure_max_ms": round(max(exposure) / 1000, 2), "analog_gain_max": round(max(again), 2),
+                    "total_gain_max": round(max(total), 2)})
+    if video_bytes and duration_s:
+        out["bitrate_mbps"] = round(video_bytes * 8 / duration_s / 1e6, 2)
+    return out
 
 
 class SessionManager:
@@ -124,6 +198,27 @@ class SessionManager:
             raise
 
     @staticmethod
+    def _save_lens_files(folder, meta):
+        """Lens data travels with every recording: the shading calibration summary, and the lens
+        intrinsics (focal length, distortion, field of view) if the unit has been calibrated for them
+        (~/BENEV/lens-intrinsics.json, made by tools/calibrate_intrinsics.py)."""
+        here = Path(__file__).resolve().parent
+        try:
+            lens = json.loads((here / "lens-shading.json").read_text())
+            meta["lens_shading"] = {"calibrated": lens.get("time"), "rotated": bool(lens.get("rotated")),
+                                    "dark_area_pct": (lens.get("stats") or {}).get("dark_area_pct"),
+                                    "lit_centre_offset_px": (lens.get("stats") or {}).get("lit_centre_offset_px")}
+        except (OSError, ValueError):
+            meta["lens_shading"] = None
+        try:
+            intr = json.loads((here / "lens-intrinsics.json").read_text())
+            (folder / "lens_intrinsics.json").write_text(json.dumps(intr, indent=2))
+            meta["lens_intrinsics"] = {k: intr.get(k) for k in ("model", "fov_image_circle_deg", "fov_diagonal_deg",
+                                                                  "fov_horizontal_deg", "fov_vertical_deg", "rms_error_px")}
+        except (OSError, ValueError):
+            meta["lens_intrinsics"] = None
+
+    @staticmethod
     def _save_edge_map(folder, rotated=False, camera_config=None):
         """Copy the lens's edge gain map into the session: tools/edge_boost_video.py needs it."""
         try:
@@ -159,7 +254,7 @@ class SessionManager:
         lg = SessionLog(folder)
         self.motion.log = lg               # sensors first, so they cover the first frames
         try:
-            video = self.camera.command({"cmd": "record_start", "dir": str(folder)})
+            video = self.camera.command({"cmd": "record_start", "dir": str(folder), "bitrate_mbps": self.camera.settings.get("bitrate_mbps")})
         except Exception:
             self.motion.log = None
             lg.close()
@@ -168,6 +263,7 @@ class SessionManager:
         meta["camera"] = (self.camera.status().get("camera") or {}).get("config")
         meta["image"] = self.camera.image_settings()   # exposure limit, brightness, edge brightening, ...
         self._save_edge_map(folder, bool(self.camera.settings.get("rotate180")), meta.get("camera"))
+        self._save_lens_files(folder, meta)
         meta["camera_rotate180"] = bool(self.camera.settings.get("rotate180"))
         meta["camera_front_axis"] = self.camera.settings.get("front_axis", "+x")   # which IMU axis the lens looks along
         meta["video_file"] = video["file"]
@@ -197,7 +293,7 @@ class SessionManager:
             video = {"error": str(e)}
         self.motion.log = None             # sensors last, so they cover the last frames
         lg = a["log"]
-        lg.close()
+        sensor_writer = lg.close()
         self.active = None
         self.camera.release()
         meta = a["meta"]
@@ -214,9 +310,15 @@ class SessionManager:
             "imu_fifo_errors": {k: v - a["errors0"].get(k, 0)
                                 for k, v in getattr(self.imu_slot.dev, "errors", {}).items()},
         }
+        fps = (meta.get("camera") or {}).get("fps")
+        meta["video_quality"] = _video_quality(a["folder"] / "frames.csv", fps, (video or {}).get("bytes"),
+                                               meta["duration_s"])
+        meta["writers"] = {"video": (video or {}).get("writer"), "sensors": sensor_writer}
         self._write_meta(a["folder"], meta)
-        log.info("session %s saved: %.1f s, %s frames, %s IMU samples", a["id"], meta["duration_s"], frames, lg.imu_n)
-        return {"id": a["id"], **meta["counts"], "duration_s": meta["duration_s"]}
+        vq = meta["video_quality"] or {}
+        log.info("session %s saved: %.1f s, %s frames (%s lost), %s IMU samples", a["id"], meta["duration_s"], frames,
+                 vq.get("frames_lost", "?"), lg.imu_n)
+        return {"id": a["id"], **meta["counts"], "duration_s": meta["duration_s"], "frames_lost": vq.get("frames_lost")}
 
     @staticmethod
     def _write_meta(folder, meta):

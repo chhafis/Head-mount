@@ -136,6 +136,10 @@
           <label>Frame rate <select id="cam-fps-select"></select></label>
           <button id="cam-apply" type="button">Apply</button>
           <label class="check"><input type="checkbox" id="cam-raw"> Also save raw DNG with photos</label>
+          <label>Video bitrate <select id="cam-bitrate">
+            <option value="0">Automatic (8 Mb/s at 1080p30)</option><option value="4">4 Mb/s</option><option value="6">6 Mb/s</option>
+            <option value="8">8 Mb/s</option><option value="12">12 Mb/s</option><option value="16">16 Mb/s</option><option value="25">25 Mb/s</option>
+          </select></label>
           <label>Camera <select id="cam-rotate"><option value="1">Camera 1 (standard orientation)</option><option value="2">Camera 2 (rotated 180°)</option></select></label>
         </fieldset>
         <fieldset class="image-config">
@@ -150,6 +154,7 @@
             <input type="range" id="img-edge" min="0" max="100" step="5" value="0" disabled></label>
           <p class="lens-help" id="img-edge-hint"></p>
           <label class="check"><input type="checkbox" id="img-ce"> Adaptive contrast enhancement</label>
+          <label class="check"><input type="checkbox" id="img-hard"> Never exceed the longest exposure and the gain limit (a dim scene gets darker instead of blurred)</label>
           <p class="lens-help" id="img-help"></p>
           <div class="lens-actions"><button id="img-reset" type="button">Recommended settings</button></div>
           <p class="camera-msg" id="img-msg" role="status"></p>
@@ -159,6 +164,7 @@
           <p class="lens-status" id="lens-status">Checking…</p>
           <p class="lens-help">Evens out the darker, tinted edges of the 170° lens. Cover the <strong>whole lens</strong> with a white diffuser (2–3 layers of white printer paper, or the bottom of a white plastic cup), point it at an even light (a window or a ceiling lamp), keep it still and press <em>Calibrate</em>. It takes about 10 seconds.</p>
           <div class="lens-actions">
+            <button id="lens-centre" type="button">Check lens centring</button>
             <button id="lens-calibrate" type="button">Calibrate</button>
             <button id="lens-reset" type="button" hidden>Remove</button>
           </div>

@@ -121,6 +121,7 @@ function render() {
   if (s.mode === "hotspot") addr.append(" or ", link(`http://${s.hotspot_ip}/`));
   else if (s.mode === "client" && s.ip) addr.append(" or ", link(`http://${s.ip}/`));
 
+  renderHotspotForm(s);
   if (s.last_error && !s.busy) message(s.last_error, true);
   else if (!pending) message(s.busy ? "" : s.message);
 
@@ -364,12 +365,38 @@ async function scan() {
 
 $("scan-btn").addEventListener("click", scan);
 
+// Hotspot name and password: filled from the status unless being edited
+let hsEditing = false;
+for (const id of ["hs-ssid", "hs-pass"]) $(id).addEventListener("input", () => { hsEditing = true; });
+function renderHotspotForm(s) {
+  if (hsEditing || s.hotspot_ssid == null) return;
+  $("hs-ssid").value = s.hotspot_ssid;
+  $("hs-pass").value = s.hotspot_password || "";
+}
+$("hotspot-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const msg = $("hs-msg");
+  $("hs-save").disabled = true;
+  try {
+    const r = await post({ action: "hotspot_config", ssid: $("hs-ssid").value, password: $("hs-pass").value });
+    status = { available: true, ...r };
+    hsEditing = false;
+    msg.textContent = r.message || "Saved";
+    msg.classList.remove("error");
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.classList.add("error");
+  } finally {
+    $("hs-save").disabled = false;
+  }
+});
+
 twoStep($("hotspot-btn"), "Tap again: this phone may lose the page", async () => {
   try {
     const r = await post({ action: "hotspot" });
     message(r.message);
     const steps = el("ol");
-    steps.append(el("li", null, `Connect your phone to “${status.hotspot_ssid}”${status.hotspot_open ? " (no password)" : ""}.`));
+    steps.append(el("li", null, `Connect your phone to “${status.hotspot_ssid}”${status.hotspot_open ? " (no password)" : status.hotspot_password ? `, password ${status.hotspot_password}` : ""}.`));
     const open = el("li", null, "Open ");
     open.append(link(`http://${status.hotspot_ip}/`), " or ", link(`http://${status.hostname || "benev.local"}/`), ".");
     steps.append(open);

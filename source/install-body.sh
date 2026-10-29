@@ -244,11 +244,29 @@ install_network() {
     install -m 755 "$sys/wifi_manager.py" "$LIB_DIR/wifi_manager.py"
     install -m 644 "$sys/benev-captive.conf" /etc/NetworkManager/dnsmasq-shared.d/benev-captive.conf
     install -m 644 "$sys/benev-wifi.service" /etc/systemd/system/benev-wifi.service
-    if [[ ! -e /etc/benev/wifi.json ]]; then
-        # Hotspot settings; an empty password means an open hotspot.
-        install -d -m 755 /etc/benev
-        (umask 077; printf '{\n  "hotspot_ssid": "Benev AI",\n  "hotspot_password": ""\n}\n' > /etc/benev/wifi.json)
-    fi
+    install -d -m 755 /etc/benev
+    # Hotspot settings. The hotspot has a password: a random one per head mount, made here the first
+    # time (and for head mounts installed before this, which had an open hotspot). An open hotspot is
+    # kept only if "hotspot_open": true is set in the file. The password is shown on the Wi-Fi page.
+    python3 - <<'PYEOF'
+import json, os, secrets
+path = "/etc/benev/wifi.json"
+try:
+    data = json.load(open(path))
+except (OSError, ValueError):
+    data = {}
+if not data.get("hotspot_password") and data.get("hotspot_open") is not True:
+    alphabet = "abcdefghjkmnpqrstuvwxyz23456789"   # no 0/O, 1/l/i: easy to type from a label
+    data.setdefault("hotspot_ssid", "Benev AI")
+    data["hotspot_password"] = "".join(secrets.choice(alphabet) for _ in range(10))
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+    print("Hotspot password set (shown on the Wi-Fi page; file /etc/benev/wifi.json).")
+PYEOF
     systemctl daemon-reload
     systemctl enable benev-wifi.service
     # Safe over SSH: while a saved network is connected the manager changes nothing.

@@ -25,6 +25,7 @@ Protocol: one JSON object per line each way, on /run/benev-wifi/wifi.sock (root:
       (no password for a saved network: uses the saved one)
   {"cmd": "forget", "ssid"}               -> {"ok": true, "message", "pending"?}
   {"cmd": "hotspot"} | {"cmd": "rejoin"}  -> {"ok": true, "pending": true, "message"}
+  {"cmd": "hotspot_config", "ssid", "password"}  -> new hotspot name / password (used the next time it starts)
   {"cmd": "hostname", "name"}             -> the device's network name (name.local) changed;
       {"ok": true, "hostname", "address", "mdns", "conflict"}
   errors                                  -> {"ok": false, "error"}
@@ -557,7 +558,39 @@ class Manager:
             return {"ok": True, "pending": True, "message": self.message}
         if cmd == "hostname":
             return self.request_hostname(str(req.get("name") or ""))
+        if cmd == "hotspot_config":
+            return self.request_hotspot_config(req.get("ssid"), req.get("password"))
         raise ValueError(f"unknown command {cmd!r}")
+
+    def request_hotspot_config(self, ssid, password):
+        """Change the hotspot's name and/or password and save them in /etc/benev/wifi.json.
+        A running hotspot keeps its old settings (changing them would drop everyone on it); the new
+        ones are used the next time it starts."""
+        new = dict(self.settings)
+        if ssid is not None:
+            check_ssid(str(ssid))
+            new["hotspot_ssid"] = str(ssid)
+        if password is not None:
+            password = str(password)
+            check_password(password)   # a hotspot always has a password; open needs the file edited by hand
+            new["hotspot_password"] = password
+        try:
+            data = json.loads(SETTINGS.read_text())
+        except (OSError, ValueError):
+            data = {}
+        data.pop("hotspot_open", None)
+        data.update({k: new[k] for k in ("hotspot_ssid", "hotspot_password")})
+        tmp = SETTINGS.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, SETTINGS)
+        self.settings = new
+        running = self.mode == "hotspot"
+        self.message = "Hotspot settings saved" + (": they apply the next time the hotspot starts" if running else "")
+        log.info("hotspot settings changed (name %r, password changed: %s)", new["hotspot_ssid"], password is not None)
+        return {"ok": True, "message": self.message, **self.status()}
 
     def request_hostname(self, name):
         """Rename the device: system host name, /etc/hosts, and the name.local announcement."""
@@ -630,6 +663,7 @@ class Manager:
             "mode": self.mode, "ssid": self.ssid, "ip": self.ip, "signal": self.signal,
             "hostname": f"{socket.gethostname().lower()}.local",
             "hotspot_ssid": s["hotspot_ssid"], "hotspot_open": not s["hotspot_password"],
+            "hotspot_password": s["hotspot_password"],
             "hotspot_ip": HOTSPOT_IP, "hotspot_clients": self.clients, "hold": self.hold,
             "networks": [dict(n, saved=n["ssid"] in saved) for n in self.networks],
             "scan_age_s": round(time.monotonic() - self.scanned_at) if self.scanned_at else None,

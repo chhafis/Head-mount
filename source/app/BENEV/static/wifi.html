@@ -38,6 +38,19 @@
     </div>
   </section>
 
+  <section class="card" aria-labelledby="hot-h">
+    <div class="card-head">
+      <h2 id="hot-h">Hotspot</h2>
+    </div>
+    <p class="muted wifi-hint">When no saved network is in range, Benev starts this network. Join it with the password to open the recorder (<code>http://10.42.0.1</code>). A change applies the next time the hotspot starts.</p>
+    <form class="hotspot-form" id="hotspot-form" autocomplete="off">
+      <label>Name <input id="hs-ssid" type="text" maxlength="32" spellcheck="false"></label>
+      <label>Password <input id="hs-pass" type="text" minlength="8" maxlength="63" spellcheck="false" autocapitalize="off"></label>
+      <button type="submit" id="hs-save">Save</button>
+    </form>
+    <p class="camera-msg" id="hs-msg" role="status"></p>
+  </section>
+
   <section class="card" aria-labelledby="nets-h">
     <div class="card-head">
       <h2 id="nets-h">Wi-Fi networks</h2>

@@ -539,6 +539,10 @@ class Handler(BaseHTTPRequestHandler):
             msg = {"cmd": "forget", "ssid": str(body["ssid"])}
         elif action in ("scan", "hotspot", "rejoin"):
             msg = {"cmd": action}
+        elif action == "hotspot_config":
+            if not isinstance(body.get("ssid", ""), str) or not isinstance(body.get("password", ""), str):
+                raise ValueError("ssid and password must be text")
+            msg = {"cmd": "hotspot_config", "ssid": body.get("ssid"), "password": body.get("password")}
         else:
             raise ValueError(f"unknown action {action!r}")
         try:
@@ -595,7 +599,7 @@ class Handler(BaseHTTPRequestHandler):
         elif action == "record_start":
             if self.app.sessions.active:
                 raise RuntimeError("a recording session is running")
-            result = camera.command({"cmd": "record_start"})
+            result = camera.command({"cmd": "record_start", "bitrate_mbps": camera.settings.get("bitrate_mbps")})
         elif action == "record_stop":
             if self.app.sessions.active:
                 raise RuntimeError("stop the session from the Record page")
@@ -609,6 +613,14 @@ class Handler(BaseHTTPRequestHandler):
             changes = {}
             if "raw" in body:
                 changes["raw"] = bool(body["raw"])
+            if "bitrate_mbps" in body:   # None / 0 = automatic (about 8 Mb/s for 1080p30)
+                value = body["bitrate_mbps"]
+                if value in (None, 0, ""):
+                    changes["bitrate_mbps"] = None
+                elif isinstance(value, bool) or not isinstance(value, (int, float)) or not 2 <= value <= 25:
+                    raise ValueError("bitrate_mbps must be between 2 and 25 (or null for automatic)")
+                else:
+                    changes["bitrate_mbps"] = float(value)
             if "front_axis" in body:
                 if body["front_axis"] not in ("+x", "-x", "+y", "-y", "+z", "-z"):
                     raise ValueError("front_axis must be one of +x -x +y -y +z -z")
@@ -619,6 +631,15 @@ class Handler(BaseHTTPRequestHandler):
                     raise RuntimeError("stop the recording before turning the picture")
                 camera.set_rotation(body["rotate180"])
             result = camera.settings
+        elif action == "lens_centre":   # quick, saves nothing: is the lens centred on the sensor?
+            if self.app.recording():
+                raise RuntimeError("stop the recording first")
+            rotated = bool(camera.settings.get("rotate180"))
+            measured = camera.command({"cmd": "shading_capture", "frames": 2, "settle": 8}, timeout=60)
+            st = measured["stats"]
+            problems, _ = lens_shading.assess(st, rotated)
+            result = {**lens_shading.centre_advice(st, rotated), "problems": problems, "rotated": rotated,
+                      "dark_area_pct": st.get("dark_area_pct"), "centre_level_pct": st.get("centre_level_pct")}
         elif action == "lens_calibrate":
             if self.app.recording():
                 raise RuntimeError("stop the recording first")
