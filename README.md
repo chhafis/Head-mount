@@ -279,6 +279,10 @@ time-critical thread. The Pi Zero 2 W's SD card stalls now and then for a few hu
   `imu.csv` and `orientation.csv`, so a stalled write overflowed the FIFO (gaps of 27–188 ms). It now
   only collects rows; a writer thread formats and writes them.
 
+- **Priority.** The camera process runs at real-time priority 10 (below the IMU readers at 20), so
+  its threads (libcamera, encoder, video writer) are not starved by other work. With three busy
+  processes and a saturated SD card, a 90 s take lost 4 frames without it and none with it.
+
 Only if the card stops for so long that the queue is full are video frames shed, starting from the
 next keyframe so the file stays playable; the number is recorded.
 

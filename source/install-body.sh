@@ -511,7 +511,13 @@ IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo
 echo "=== Done $(date) ==="
 echo "Recorder: http://$(hostname | tr '[:upper:]' '[:lower:]').local  or  http://${IP:-<pi-address>}  (README: $APP_DIR/README.md)"
-echo "Without a known Wi-Fi network it starts the open hotspot \"Benev AI\": join it, the setup page opens."
+HOTSPOT_PW=$(python3 -c 'import json; print(json.load(open("/etc/benev/wifi.json")).get("hotspot_password", ""))' 2>/dev/null || true)
+if [[ -n $HOTSPOT_PW ]]; then
+    echo "Without a known Wi-Fi network it starts the hotspot \"Benev AI\": join it with the password $HOTSPOT_PW, the setup page opens."
+    echo "(The password is also on the Wi-Fi page and in /etc/benev/wifi.json. Note it on the unit's label.)"
+else
+    echo "Without a known Wi-Fi network it starts the open hotspot \"Benev AI\": join it, the setup page opens."
+fi
 if [[ $UPDATE == 1 || $APP_ONLY == 1 ]]; then
     check_camera_stack
 fi

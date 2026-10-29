@@ -48,6 +48,7 @@ SENSOR_CUT_AT_START = os.environ.get("BENEV_CUT_AT_START", "0") == "1"
 VIDEO_QUEUE_BYTES = 48 << 20     # encoded video waiting for the SD card; ~50 s at 8 Mb/s before frames are shed
 BITS_PER_PIXEL = 0.13            # default H.264 bitrate: 1080p30 -> 8.1 Mb/s (the proposal says 6-8)
 BITRATE_LIMITS_MBPS = (2.0, 25.0)   # 25 Mb/s is the hardware encoder's comfortable ceiling
+CAMERA_RT_PRIORITY = 10
 JPEG_QUALITY = 95
 SHADING_FRAMES = 8              # raw frames averaged for the lens shading calibration
 LENS_FILE = Path(__file__).resolve().parent / "lens-shading.json"
@@ -643,6 +644,14 @@ def save_yuv420_jpeg(array, size, path):
 
 def main():
     width, height, fps = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
+    # Real-time priority for the camera's threads (libcamera's pipeline, the encoder's polling thread, the
+    # video writer): threads created from here on inherit it. Under heavy CPU load they were starved and
+    # frames dropped (measured: 4 frames in 90 s with three busy processes). 10 is below the IMU readers
+    # (20) and above ordinary tasks; the service's LimitRTPRIO=20 allows it.
+    try:
+        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(CAMERA_RT_PRIORITY))
+    except (OSError, AttributeError) as e:
+        log(f"no real-time priority for the camera ({e}); frames may be dropped under heavy load")
     service = CameraService(width, height, fps)
     # systemd sends SIGTERM when the service stops or the Pi shuts down; turning it into
     # SystemExit runs the finally below, so an open recording still gets its MP4 index.
