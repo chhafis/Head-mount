@@ -449,8 +449,10 @@ Everything in a recording is on **one clock**, Linux `CLOCK_MONOTONIC` in nanose
 4. **Calibrate the IMU and magnetometer** where it will be used.
 5. Make **lens intrinsics** (above) and copy them to the unit.
 6. Record a test take of 15 minutes or more at the shipping settings. In `session.json` check
-   `video_quality.frames_lost` = 0, `counts.imu_fifo_overruns` = 0, `counts.imu_max_gap_ms` below 5,
-   and `exposure_max_ms` / `analog_gain_max` within the limits.
+   `video_quality.frames_lost` = 0, `counts.imu_fifo_overruns` = 0, `counts.imu_max_gap_ms` below 20
+   (a few single skipped samples, `ts_jump`, are the sensor's own and can reach about 10 ms; measured on a
+   head mount over 15 minutes: 0 frames lost, 0 overruns, largest gap 9.5 ms), and `exposure_max_ms` /
+   `analog_gain_max` within the limits.
 
 ## LEDs, fan and buttons
 
