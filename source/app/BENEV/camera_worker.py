@@ -138,18 +138,6 @@ class PreviewOutput(Output):
                 return   # the server is gone
 
 
-class MJPEGRateEncoder(MJPEGEncoder):
-    """MJPEGEncoder that writes the real frame rate into the file (picamera2 hard-codes 30)."""
-
-    def __init__(self, bitrate, fps):
-        super().__init__(bitrate)
-        self.fps = fps
-
-    def _send_streams(self, output):
-        output._add_stream("video", "mjpeg", rate=Fraction(self.fps).limit_denominator(1000),
-                           width=self.width, height=self.height)
-
-
 class VideoOutput(PyavOutput):
     """The video file, and for a session also frames.csv: one row for every frame written.
 
@@ -164,8 +152,9 @@ class VideoOutput(PyavOutput):
     video stays decodable; the number is reported.
     """
 
-    def __init__(self, path, fmt, encoder=None, frames_path=None, metadata=None):
+    def __init__(self, path, fmt, encoder=None, frames_path=None, metadata=None, rate=None):
         super().__init__(str(path), format=fmt)
+        self.rate = rate                  # frame rate to state in an MJPEG file (picamera2 writes 30 whatever it is)
         self.encoder = encoder
         self.metadata = metadata          # SensorTimestamp (us) -> request metadata, from post_callback
         self.frames = None
@@ -178,6 +167,11 @@ class VideoOutput(PyavOutput):
         self._shedding = False
         self.error_callback = lambda e: log(f"video write failed: {e}")
         self.stats = {}
+
+    def _add_stream(self, encoder_stream, codec_name, **kwargs):
+        if self.rate is not None and codec_name == "mjpeg":
+            kwargs["rate"] = self.rate
+        super()._add_stream(encoder_stream, codec_name, **kwargs)
 
     def start(self):
         super().start()
@@ -510,14 +504,15 @@ class CameraService:
             ext, fmt = "mp4", "mp4"
         else:
             bitrate = int(min(80e6, w * h * fps * 1.5))
-            encoder = MJPEGRateEncoder(bitrate, fps)
+            encoder = MJPEGEncoder(bitrate=bitrate)
             ext, fmt = "mkv", "matroska"
+        rate = Fraction(fps).limit_denominator(1000)
         if folder:
             path = Path(folder) / f"video.{ext}"
-            output = VideoOutput(path, fmt, encoder, Path(folder) / "frames.csv", self.recent_metadata)
+            output = VideoOutput(path, fmt, encoder, Path(folder) / "frames.csv", self.recent_metadata, rate=rate)
         else:
             path = MEDIA / f"video-{stamp}.{ext}"
-            output = VideoOutput(path, fmt)
+            output = VideoOutput(path, fmt, rate=rate)
         self.picam2.start_encoder(encoder, output, name="main")
         self.recording = {"encoder": encoder, "output": output, "path": path, "file": path.name,
                           "codec": self.config["record_codec"], "bitrate": bitrate, "t0": time.monotonic()}
