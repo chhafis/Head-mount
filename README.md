@@ -1,6 +1,6 @@
 # BENEV head-mount recorder – installer for a fresh Raspberry Pi Zero 2 W
 
-The BENEV head mount records **video, IMU (960 Hz) and magnetometer data together, on one
+The BENEV head mount records **video, IMU (1920 Hz) and magnetometer data together, on one
 clock**, as training data for robotics AI. Start and stop with the **record button** on the head
 mount, or from a phone or PC browser (or your own app) at **`http://benev.local`**. If the head
 mount can't find a Wi-Fi network it knows, it starts its own hotspot, **"Benev AI"**, where you
@@ -209,7 +209,7 @@ holds the same files):
 |---|---|
 | `video.mp4` | H.264 video (`video.mkv` with MJPEG at 1920×1200) |
 | `frames.csv` | `frame,t_ns,pts_us,exposure_us,analog_gain,digital_gain,colour_temp_k`: one row per video frame. `t_ns` is the sensor's start-of-exposure time; `pts_us` is the frame's time in the video file. |
-| `imu.csv` | `t_ns,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps`: accelerometer (g) and gyroscope (°/s), raw, in IMU axes, **~952 Hz** (the LSM6DSV16B's "960 Hz" rate, its nearest to 1 kHz) with the IMU's own hardware timestamps. The gyro bias is not removed; it is in `calibration.json`. |
+| `imu.csv` | `t_ns,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps`: accelerometer (g) and gyroscope (°/s), raw, in IMU axes, **~1900 Hz** (the LSM6DSV16B is set to 1920 Hz; it has no exact 1 kHz, only 960 and 1920 Hz, so the rate above 1 kHz is used) with the IMU's own hardware timestamps. The gyro bias is not removed; it is in `calibration.json`. |
 | `orientation.csv` | `t_ns,qw,qx,qy,qz,roll_deg,pitch_deg,yaw_deg`: fused orientation for every IMU sample. The quaternion rotates IMU-frame vectors into the earth frame (z up, x magnetic north). |
 | `mag.csv` | `t_ns,mx_uT,my_uT,mz_uT,mx_cal_uT,my_cal_uT,mz_cal_uT`: magnetometer at ~25 Hz, raw (sensor axes) and calibrated (IMU axes; equal to raw if not calibrated). |
 | `calibration.json` | the calibration in effect for this recording (if any) |
@@ -223,7 +223,7 @@ line up by timestamp directly. To find the IMU data for a frame, look up its `t_
 time. Sensor logging starts just before the first frame and stops after the last, so every
 frame has IMU data on both sides.
 
-Typical results: IMU 952.9 Hz, no FIFO overruns, and video frames matching
+Typical results: IMU 1897 Hz, no FIFO overruns, and video frames matching
 `frames.csv` within 0.04 ms. In a 2-minute recording with the live preview and
 playback downloads running at the same time (worst case), 2 of 115,000 IMU samples were missing
 (largest gap 2.1 ms), shown as `ts_jump` in `session.json`. Without that extra load, none.
@@ -275,7 +275,7 @@ time-critical thread. The Pi Zero 2 W's SD card stalls now and then for a few hu
   frames (gaps of 66–333 ms). Frames are now put into a queue (up to 48 MB, about 50 s at 8 Mb/s) and
   written by a thread of their own; the encoder's thread never waits for the card. The live
   preview frames likewise go to the server through a one-place mailbox.
-- **IMU.** The sensor's FIFO holds only about 125 ms at 960 Hz. The thread that empties it also wrote
+- **IMU.** The sensor's FIFO holds only about 63 ms at 1920 Hz. The thread that empties it also wrote
   `imu.csv` and `orientation.csv`, so a stalled write overflowed the FIFO (gaps of 27–188 ms). It now
   only collects rows; a writer thread formats and writes them.
 
@@ -422,16 +422,18 @@ Everything in a recording is on **one clock**, Linux `CLOCK_MONOTONIC` in nanose
 
 - **Video frames.** The sensor's start-of-exposure timestamp for each frame (`frames.csv`, `t_ns`).
 - **IMU.** The LSM6DSV16B stamps every sample with a counter on its own oscillator. The recorder reads
-  the FIFO 50 times a second and notes the host time right after each read. Over the last two
+  the FIFO 100 times a second and notes the host time right after each read. Over the last two
   minutes of these (counter, host time) pairs it learns the counter's true period, and takes the pairs
   with the smallest latency as the offset (reading latency can only make a host time later), so
   every sample gets a host-clock time without depending on when it was read (`motion.ClockMap`).
   Frame-to-IMU alignment measured by a reviewer: median 0.26 ms.
 - **Magnetometer.** Stamped with the host clock at the midpoint of its measurement (about 25 Hz).
-- **Rates.** The IMU is configured at 960 Hz, the setting nearest to 1 kHz that the part offers (its rates
-  are 480, 960, 1920 Hz ...). Against the host clock it measures 952.9 Hz; the exact rate of each
-  recording is in `session.json` (`imu_rate_hz`), and the timestamps are the measured ones, so no
-  resampling is needed.
+- **Rates.** The IMU is configured at **1920 Hz**. The part has no exact 1 kHz (its rates are 480, 960, 1920 Hz
+  ...), so the one above 1 kHz is used (it was 960 Hz). Against the host clock it measures about 1897 Hz
+  (the same 1.2 % below the nominal rate as 952.9 Hz was at 960 Hz); the exact rate of each recording is
+  in `session.json` (`imu_rate_hz`), and the timestamps are the measured ones, so no resampling is needed.
+  At this rate `imu.csv` and `orientation.csv` are about 7.4 and 8.7 MB a minute (110 and 130 MB for a
+  15-minute recording).
 - **No hardware sync pulse.** There is no common trigger line between the sensor and the IMU on
   this board; synchronisation is by timestamps on the common clock as described. The
   residual error is the host-time jitter of a FIFO read (below 1 ms) and the exposure start offset

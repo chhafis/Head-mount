@@ -7,7 +7,7 @@ costly in two places:
   * the video encoder's polling thread (picamera2) writes each frame to the file and also hands
     the camera its buffers back; while it waits for the card, the camera runs out of buffers and
     drops whole frames;
-  * the IMU reader thread must empty the sensor's 256-word FIFO (about 125 ms at 960 Hz); while it
+  * the IMU reader thread must empty the sensor's 256-word FIFO (about 63 ms at 1920 Hz); while it
     waits for the card the FIFO overflows and samples are lost.
 
 The caller puts a job (a function and its arguments) into the queue and goes on; the jobs run in

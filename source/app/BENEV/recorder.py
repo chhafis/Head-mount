@@ -5,7 +5,7 @@ Every session is a folder under media/sessions/<id>/:
   video.mp4|.mkv    the video (MJPEG .mkv only at 1920x1200)
   frames.csv        frame,t_ns,pts_us,exposure_us,analog_gain,digital_gain,colour_temp_k
                     (pts_us: the frame's presentation time in the video file)
-  imu.csv           t_ns,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps        (raw, IMU axes, ~952 Hz;
+  imu.csv           t_ns,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps        (raw, IMU axes, ~1900 Hz;
                     gyro bias not removed, it is in calibration.json)
   orientation.csv   t_ns,qw,qx,qy,qz,roll_deg,pitch_deg,yaw_deg      (fused, same rate)
   mag.csv           t_ns,mx_uT,my_uT,mz_uT,mx_cal_uT,my_cal_uT,mz_cal_uT  (~25 Hz; raw sensor axes,
@@ -39,7 +39,7 @@ class SessionLog:
     formats and writes them.
     """
 
-    IMU_BATCH = 32      # samples per job (~34 ms at 953 Hz)
+    IMU_BATCH = 64      # samples per job (~34 ms at 1900 Hz)
     MAG_BATCH = 4
 
     def __init__(self, folder):
@@ -375,7 +375,7 @@ class SessionManager:
         step = 1e9 / hz
         out_t, out_q, out_a, out_g = [], [], [], []
         next_t = None
-        # One row per IMU sample in both files. At ~952 Hz most rows are skipped, so only the
+        # One row per IMU sample in both files. At ~1900 Hz most rows are skipped, so only the
         # timestamp of each row is parsed until one is kept.
         with open(f / "orientation.csv") as fo, open(f / "imu.csv") as fi:
             next(fo, None)

@@ -46,7 +46,7 @@ from outputs import Outputs
 from recorder import SessionManager
 from sensors import MAX17048, LSM6DSV16B, MMC5983MA, make_thread_realtime
 
-RATE_HZ = 25            # magnetometer + dashboard updates; the IMU runs in motion.py at 960 Hz
+RATE_HZ = 25            # magnetometer + dashboard updates; the IMU runs in motion.py at 1920 Hz
 SLOW_PERIOD_S = 1.0     # fuel gauge, temperatures, camera/session/Wi-Fi status
 RETRY_S = 2.0           # wait before re-initialising a sensor that failed
 BATTERY_HISTORY_S = 3600

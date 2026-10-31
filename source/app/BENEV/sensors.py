@@ -120,27 +120,31 @@ class LSM6DSV16B:
 
     Measured on this part (2026-10-24): the FIFO holds 256 words; every word carries a 2-bit
     counter shared by all words of one sampling event; accelerometer words are Z, Y, X like
-    the output registers; at 240 Hz one sample is exactly 192 timestamp counts (so 48 at 960 Hz:
-    both come from the same internal oscillator).
+    the output registers; at 240 Hz one sample is exactly 192 timestamp counts (so 48 at 960 Hz and
+    24 at 1920 Hz: all come from the same internal oscillator). At 1920 Hz the FIFO holds only ~63 ms
+    (2 words per sample), so motion.py reads it 100 times a second.
     """
     IF_CFG, WHO_AM_I, CTRL1, CTRL2, CTRL3, CTRL6, CTRL8, OUT_TEMP_L = 0x03, 0x0F, 0x10, 0x11, 0x12, 0x15, 0x17, 0x20
     FIFO_CTRL3, FIFO_CTRL4, FIFO_STATUS1, FIFO_DATA_OUT_TAG = 0x09, 0x0A, 0x1B, 0x78
     FUNCTIONS_ENABLE, INTERNAL_FREQ = 0x50, 0x4F
     TAG_GYRO, TAG_ACCEL, TAG_TIMESTAMP = 0x01, 0x02, 0x04
     IDS = {0x70: "LSM6DSV16X", 0x71: "LSM6DSV16B"}
-    # Same code for the CTRL1/CTRL2 ODR and the FIFO batch rate. 960 Hz is the chip's "1 kHz".
-    ODR_CODES = {240: 0x07, 480: 0x08, 960: 0x09}
+    # Same code for the CTRL1/CTRL2 ODR and the FIFO batch rate. The chip has no exact 1 kHz: 960 Hz is
+    # below it, 1920 Hz (the default) above it.
+    ODR_CODES = {240: 0x07, 480: 0x08, 960: 0x09, 1920: 0x0A}
+    DEFAULT_ODR_HZ = 1920
     COUNTS_AT_240HZ = 192         # timestamp counts per sample at 240 Hz
     TS_EVERY = 8                  # a timestamp word every 8th sample (FIFO_CTRL4 DEC_TS = 8)
     READ_CHUNK_WORDS = 256        # FIFO words per SPI transfer
     GYRO_FS = {125: 0x0, 250: 0x1, 500: 0x2, 1000: 0x3, 2000: 0x4, 4000: 0xC}
     ACCEL_FS = {2: 0x0, 4: 0x1, 8: 0x2, 16: 0x3}
 
-    def __init__(self, bus=0, cs=0, accel_g=4, gyro_dps=1000, odr_hz=960):
+    def __init__(self, bus=0, cs=0, accel_g=4, gyro_dps=1000, odr_hz=None):
+        odr_hz = odr_hz or self.DEFAULT_ODR_HZ
         odr = self.ODR_CODES[odr_hz]
         self.odr_hz = odr_hz
         self.COUNTS_PER_SAMPLE = self.COUNTS_AT_240HZ * 240 // odr_hz
-        # 960 Hz moves ~14 KB/s of FIFO data; 8 MHz (the chip allows 10) keeps each read short.
+        # 1920 Hz moves ~27 KB/s of FIFO data; 8 MHz (the chip allows 10) keeps each read short.
         self.dev = _SpiDevice(bus, cs, mode=3, hz=8_000_000)
         try:
             who = self.dev.read(self.WHO_AM_I)[0]

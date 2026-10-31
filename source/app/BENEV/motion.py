@@ -21,7 +21,7 @@ from sensors import make_thread_realtime
 
 log = logging.getLogger("dashboard")
 
-DRAIN_HZ = 50                     # FIFO reads per second; at 960 Hz the FIFO holds ~125 ms
+DRAIN_HZ = 100                    # FIFO reads per second; at 1920 Hz the FIFO holds ~63 ms (125 ms at 960 Hz)
 DEG = math.pi / 180
 
 

@@ -102,7 +102,7 @@ function renderRecording() {
   const parts = [];
   if (cfg) parts.push(`${cfg.width}×${cfg.height} · ${cfg.fps} fps · ${cfg.record_codec.toUpperCase()}`);
   else if (last.camera && last.camera.settings) parts.push(`${last.camera.settings.width}×${last.camera.settings.height} · ${last.camera.settings.fps} fps`);
-  parts.push("IMU 960 Hz · magnetometer 25 Hz");
+  parts.push("IMU 1920 Hz · magnetometer 25 Hz");
   if (last.disk) parts.push(`${fmtBytes(last.disk.free_bytes)} free`);
   if (on) parts.push(`${session.imu_samples.toLocaleString()} IMU samples`);
   $("rec-meta").textContent = parts.join(" · ");
