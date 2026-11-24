@@ -1,6 +1,6 @@
 /* Edge brightening: per-pixel gain on a YUV420 frame, in place. Called from edge_boost.py.
  *
- * The Pi's image processor can lift the edges of a wide-angle lens by 4x at most. What is still
+ * The Pi's image processor can lift the edges of a wide-angle lens by 8x at most. What is still
  * dark afterwards gets a further gain here, from a map made at calibration time.
  *
  *   boost_luma:    y = lo + (y - lo) * gain / 256, clamped to [lo, hi]   (gain in 8.8 fixed point)

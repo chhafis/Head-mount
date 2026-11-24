@@ -3,9 +3,10 @@
 The 170° lens makes the image darker and tinted towards its edges. The ISP corrects that with
 three 16x12 gain tables over the sensor: luminance (the fall-off) and Cr / Cb (the colour shift,
 as gains for red and blue relative to green). This computes them the way Raspberry Pi's tuning
-tool does (libcamera utils/tuning/libtuning/modules/lsc: ALSCRaspberryPi): per-cell channel
-means minus black level, 1/G normalised to a minimum of 1 for luminance, G/R and G/B for colour,
-each smoothed with a 3x3 median and clipped to the ISP's range (< 4).
+tool does (ctt_alsc): per-cell channel means minus black level, 1/G normalised to a minimum of 1
+for luminance, G/R and G/B for colour, each smoothed with a 3x3 median. The vc4 ISP stores these
+gains as u4.10 (just under 16). The tuning tool clamps them at 8: a higher gain overflows later
+in the pipeline, and it is the value used for a lens that cuts the corners off.
 
 The input must be a flat field: a white diffuser right in front of the lens (with 170° nothing
 else fills the view evenly), lit evenly, not over-exposed.
@@ -13,7 +14,7 @@ else fills the view evenly), lit evenly, not over-exposed.
 import numpy as np
 
 GRID = (16, 12)              # vc4 ALSC cells (columns, rows)
-MAX_GAIN = 3.999             # largest gain the tables may hold
+MAX_GAIN = 8.0               # tuning-tool clamp (vc4 u4.10 holds just under 16; above 8 the pipeline overflows)
 DEFAULT_STRENGTH = 1.0       # share of the luminance fall-off corrected (1 = fully flat; edges get noisier)
 RELIABLE_FRACTION = 0.06     # cells dimmer than this share of the brightest are noise: their colour is filled in
 
@@ -137,7 +138,7 @@ def compute_alsc(planes, black_levels, colour_temp, luminance_strength=DEFAULT_S
         "red_shift_pct": round(float((np.max(np.abs(rg / rg[centre].mean() - 1))) * 100), 1),
         "blue_shift_pct": round(float((np.max(np.abs(bg / bg[centre].mean() - 1))) * 100), 1),
         "clipped_cells": int((lum > MAX_GAIN).sum() + (cr > MAX_GAIN).sum() + (cb > MAX_GAIN).sum()),
-        # Share of the picture that needs more than the ISP's 4x brightening: it stays dark.
+        # Share of the picture that needs more than the ISP's 8x brightening: it stays dark.
         "dark_area_pct": round(float((lum > MAX_GAIN).mean() * 100), 1),
         "unevenness_pct": unevenness_pct(g),
         "lit_centre_offset_px": lit_centre_offset(g),
@@ -226,7 +227,7 @@ def assess(stats, rotated=False):
     if stats["dark_area_pct"] >= 1:
         warnings.append(f"{stats['dark_area_pct']} % of the picture (its corners and edges, down to "
                         f"{stats['corner_brightness_pct']} % of the centre's brightness) is darker than the image "
-                        "processor can lift (limit 4×), so it stays dark. The lens does not cover the whole sensor: "
+                        "processor can lift (limit 8×), so it stays dark. The lens does not cover the whole sensor: "
                         "crop the picture or use a lens with a larger image circle.")
     dx, dy = stats.get("lit_centre_offset_px") or (0, 0)
     if stats["dark_area_pct"] >= 1 and max(abs(dx), abs(dy)) >= OFFCENTRE_PX:

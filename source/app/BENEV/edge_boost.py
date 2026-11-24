@@ -1,6 +1,6 @@
 """Edge brightening for a wide-angle lens: a gain map applied to every video frame.
 
-The Pi's ISP lifts a lens's dark edges by at most 4x (lens shading tables). Where a lens still
+The Pi's ISP lifts a lens's dark edges by at most 8x (lens shading tables). Where a lens still
 leaves the edges dark, lens calibration also stores how much extra gain each part needs
 ("edge_gain" in lens-shading.json, made by lens_shading.edge_gain_grid from a flat field taken
 with the ISP correction already active). This module turns that into a per-pixel map for the

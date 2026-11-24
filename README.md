@@ -347,10 +347,13 @@ colour tables itself.
 
 **Limits**
 
-- The ISP can raise the edges by a factor of 4 at most. If the lens's image circle does not reach
-  the corners of the sensor, those areas remain darker, and the page reports their share of the
-  picture. With a lens whose image circle covers the sensor (1/2.6" format or larger for the
-  AR0234) this share is close to zero. For lenses that fall short, see *Edge brightening* below.
+- The ISP can raise the edges by a factor of 8 at most (its lens-shading tables are u4.10, which
+  hold just under 16, and Raspberry Pi's tuning tool stops at 8 so the rest of the pipeline does
+  not overflow). If the lens's image circle does not reach the corners of the sensor, those areas
+  remain darker, and the page reports their share of the picture. With a lens whose image circle
+  covers the sensor (1/2.6" format or larger for the AR0234) this share is close to zero. For
+  lenses that fall short, see *Edge brightening* below. A calibration made when this limit was 4×
+  is still capped there: calibrate again to use the full range.
 - The correction addresses shading, not lens distortion (the fisheye projection).
 - **Lens centring (mechanical vignetting).** If the lens holder sits off-centre over the sensor,
   one side of the sensor is lit well and the opposite side receives little or no light, and no
