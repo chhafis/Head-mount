@@ -51,13 +51,15 @@ def write_tuning(image, rotate180=False):
     except FileNotFoundError:
         lens = None
     lens = lens_shading.oriented(lens, rotate180)
-    if lens:
-        for algo in tuning["algorithms"]:
-            if "rpi.alsc" in algo:
-                algo["rpi.alsc"] = lens["alsc"]
-                break
-        else:
-            tuning["algorithms"].append({"rpi.alsc": lens["alsc"]})
+    # Measured tables when this lens has been calibrated; otherwise the ISP's own cos^4
+    # vignetting curve. No luminance_lut is sent with that curve: the ISP would ignore it.
+    alsc = lens["alsc"] if lens else lens_shading.builtin_alsc()
+    for algo in tuning["algorithms"]:
+        if "rpi.alsc" in algo:
+            algo["rpi.alsc"] = alsc
+            break
+    else:
+        tuning["algorithms"].append({"rpi.alsc": alsc})
     tmp = TUNING_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(tuning, indent=1))
     os.replace(tmp, TUNING_FILE)

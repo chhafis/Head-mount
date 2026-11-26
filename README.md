@@ -313,9 +313,11 @@ to let the exposure grow again beyond the gain limit. The values actually used a
 ## Lens shading correction
 
 A wide-angle lens delivers less light to the edges of the sensor and shifts their colour (pink,
-green or purple). The Raspberry Pi image processor (ISP) can compensate, but it needs a
-measurement of the specific lens. The stock AR0234 tuning contains none, so each head mount is
-calibrated once on the Device page.
+green or purple). The Raspberry Pi image processor (ISP) compensates with its lens-shading
+block (`rpi.alsc`). With no measurement it uses its own vignetting curve, the cos^4 law driven by
+`corner_strength` (2, the value in the ISP source), which is about 2× at the corners and is the
+same in every direction. Each head mount is then calibrated once on the Device page, and that
+measurement replaces the curve.
 
 **Procedure**
 
@@ -336,14 +338,16 @@ calibrated individually**. The result is stored on the head mount only
 
 After calibration the page reports how uneven the picture was, and the preview, photos and
 recordings are corrected. A calibration is rejected, and the previous one kept, if the scene is too
-dark, over-exposed or not an even white; the message states what to correct. *Remove* reverts to
-the uncorrected picture.
+dark, over-exposed or not an even white; the message states what to correct. *Remove* drops the
+measurement and the ISP goes back to its own cos^4 vignetting curve.
 
 **Method.** The calibration averages 8 full-size raw frames, measures brightness and the
 red/blue balance on a 16×12 grid, and writes gain tables into a copy of the sensor's tuning file
-(`~/BENEV/camera-tuning.json`). This follows the method of Raspberry Pi's tuning tool
-(`rpi.alsc`), for a single colour temperature; under very different lighting the ISP adjusts the
-colour tables itself.
+(`~/BENEV/camera-tuning.json`). The tables are what Raspberry Pi's tuning tool writes for
+`rpi.alsc`: luminance is 1/G with its smallest gain at 1 and clamped at 8, and the colour tables
+are G/R and G/B with their smallest gain at 1. One colour temperature is measured; under very
+different lighting the ISP adjusts the colour tables itself. The block has no `corner_strength`,
+because the ISP would then ignore the measured vignetting table and build the cos^4 curve instead.
 
 **Limits**
 

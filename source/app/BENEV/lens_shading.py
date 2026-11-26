@@ -3,10 +3,11 @@
 The 170° lens makes the image darker and tinted towards its edges. The ISP corrects that with
 three 16x12 gain tables over the sensor: luminance (the fall-off) and Cr / Cb (the colour shift,
 as gains for red and blue relative to green). This computes them the way Raspberry Pi's tuning
-tool does (ctt_alsc): per-cell channel means minus black level, 1/G normalised to a minimum of 1
-for luminance, G/R and G/B for colour, each smoothed with a 3x3 median. The vc4 ISP stores these
-gains as u4.10 (just under 16). The tuning tool clamps them at 8: a higher gain overflows later
-in the pipeline, and it is the value used for a lens that cuts the corners off.
+tool does (ctt_alsc): per-cell channel means minus black level, a 3x3 median, then each table
+divided so its smallest gain is 1. Luminance (1/G) is the vignetting table; G/R and G/B are the
+colour shift. Only luminance is clamped, at 8, which is where that tool stops (the vc4 ISP stores
+u4.10, just under 16, and a higher gain overflows later in the pipeline). With no measurement the
+ISP is given corner_strength instead, and it builds the same cos^4 vignetting curve itself.
 
 The input must be a flat field: a white diffuser right in front of the lens (with 170° nothing
 else fills the view evenly), lit evenly, not over-exposed.
@@ -14,8 +15,11 @@ else fills the view evenly), lit evenly, not over-exposed.
 import numpy as np
 
 GRID = (16, 12)              # vc4 ALSC cells (columns, rows)
-MAX_GAIN = 8.0               # tuning-tool clamp (vc4 u4.10 holds just under 16; above 8 the pipeline overflows)
-DEFAULT_STRENGTH = 1.0       # share of the luminance fall-off corrected (1 = fully flat; edges get noisier)
+MAX_GAIN = 8.0               # ctt_alsc luminance clamp (vc4 u4.10 holds just under 16; above 8 the pipeline overflows)
+DEFAULT_STRENGTH = 1.0       # share of the vignetting table applied (1 = the whole curve; the ISP default)
+# ISP's own default for the cos^4 curve it builds when no measured luminance table is supplied
+# (alsc.cpp generateLut). The corner cells land a little under this value.
+CORNER_STRENGTH = 2.0
 RELIABLE_FRACTION = 0.06     # cells dimmer than this share of the brightest are noise: their colour is filled in
 
 
@@ -103,29 +107,49 @@ def _fill_unreliable(table, reliable):
     return t
 
 
+def _min_gain(t):
+    """Scale a gain table so its smallest entry is 1, as ctt_alsc writes it."""
+    t = np.asarray(t, dtype=np.float64)
+    return t / np.min(t)
+
+
+def _listed(t):
+    return [round(float(v), 3) for v in np.asarray(t, dtype=np.float64).flatten()]
+
+
+def builtin_alsc(corner_strength=CORNER_STRENGTH, luminance_strength=DEFAULT_STRENGTH):
+    """rpi.alsc with no measured tables. The ISP then builds its cos^4 vignetting curve from
+    corner_strength (alsc.cpp generateLut) and applies it in full at luminance_strength 1.
+    There is no luminance_lut here: if both are present the ISP ignores the measured table."""
+    if corner_strength <= 1.0:
+        raise ValueError("corner_strength must be > 1")
+    return {
+        "omega": 1.3, "n_iter": 100, "luminance_strength": luminance_strength,
+        "corner_strength": float(corner_strength), "asymmetry": 1.0,
+        "sigma": 0.005, "sigma_Cr": 0.005, "sigma_Cb": 0.005,
+    }
+
+
 def compute_alsc(planes, black_levels, colour_temp, luminance_strength=DEFAULT_STRENGTH):
     """planes: {"R","Gr","Gb","B"} (any common scale); black_levels: same scale, in that order.
     -> (rpi.alsc dict for the tuning file, statistics for the user)."""
     blk = dict(zip(("R", "Gr", "Gb", "B"), black_levels))
     grids = {k: np.maximum(grid_means(np.asarray(v, dtype=np.float64)) - blk[k], 0.1) for k, v in planes.items()}
     g = (grids["Gr"] + grids["Gb"]) / 2
-    lum = _median3(1 / g)
-    lum = lum / lum.min()
+    # ctt_alsc order: median, then minimum gain 1. The 8x clamp is for the vignetting table only.
     reliable = g > RELIABLE_FRACTION * g.max()
-    cr = _median3(_fill_unreliable(g / grids["R"], reliable))
-    cb = _median3(_fill_unreliable(g / grids["B"], reliable))
-
-    def table(t):
-        return [round(float(v), 3) for v in np.clip(t, 0, MAX_GAIN).flatten()]
+    lum = _min_gain(_median3(1 / g))
+    cr = _min_gain(_median3(_fill_unreliable(g / grids["R"], reliable)))
+    cb = _min_gain(_median3(_fill_unreliable(g / grids["B"], reliable)))
 
     ct = int(round(colour_temp or 5000))
     alsc = {
         "omega": 1.3, "n_iter": 100, "luminance_strength": luminance_strength,
-        "calibrations_Cr": [{"ct": ct, "table": table(cr)}],
-        "calibrations_Cb": [{"ct": ct, "table": table(cb)}],
-        "luminance_lut": table(lum),
+        "calibrations_Cr": [{"ct": ct, "table": _listed(cr)}],
+        "calibrations_Cb": [{"ct": ct, "table": _listed(cb)}],
+        "luminance_lut": _listed(np.minimum(lum, MAX_GAIN)),
         # Only one colour temperature measured: Raspberry Pi's defaults for the adaptive part.
-        "sigma": 0.005, "sigma_Cb": 0.005,
+        "sigma": 0.005, "sigma_Cr": 0.005, "sigma_Cb": 0.005,
     }
     rg, bg = grids["R"] / g, grids["B"] / g
     centre = (slice(GRID[1] // 2 - 1, GRID[1] // 2 + 1), slice(GRID[0] // 2 - 1, GRID[0] // 2 + 1))
@@ -137,7 +161,7 @@ def compute_alsc(planes, black_levels, colour_temp, luminance_strength=DEFAULT_S
         # How far the edges' colour is from the centre's (the "hue"), before correction
         "red_shift_pct": round(float((np.max(np.abs(rg / rg[centre].mean() - 1))) * 100), 1),
         "blue_shift_pct": round(float((np.max(np.abs(bg / bg[centre].mean() - 1))) * 100), 1),
-        "clipped_cells": int((lum > MAX_GAIN).sum() + (cr > MAX_GAIN).sum() + (cb > MAX_GAIN).sum()),
+        "clipped_cells": int((lum > MAX_GAIN).sum()),
         # Share of the picture that needs more than the ISP's 8x brightening: it stays dark.
         "dark_area_pct": round(float((lum > MAX_GAIN).mean() * 100), 1),
         "unevenness_pct": unevenness_pct(g),

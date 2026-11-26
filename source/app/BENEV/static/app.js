@@ -944,7 +944,7 @@ function renderLens(lens) {
   const when = lens.time ? new Date(lens.time.replace(/([+-]\d\d)(\d\d)$/, "$1:$2")) : null;
   document.getElementById("lens-status").textContent = lens.calibrated
     ? `Calibrated${when && !isNaN(when) ? ` ${when.toLocaleString()}` : ""}: ${lensSummary(lens.stats)}, now corrected.`
-    : "Not calibrated: the edges of the picture are darker and tinted.";
+    : "Not calibrated: the image processor is using its basic vignetting curve (about 2\u00d7 in the corners). Calibrate to measure this lens.";
   document.getElementById("lens-reset").hidden = !lens.calibrated;
   document.getElementById("lens-calibrate").textContent = lens.calibrated ? "Calibrate again" : "Calibrate";
 }
@@ -965,7 +965,7 @@ async function lensAction(action) {
     } else if (r.saved) {
       msg.textContent = `Saved: ${lensSummary(r.stats)}. ${(r.warnings || []).join(" ")}`;
     } else {
-      msg.textContent = "Removed: the camera is back to no lens shading correction.";
+      msg.textContent = "Removed: the image processor is back to its basic vignetting curve.";
     }
     lensBusy = false;
     renderLens(reply.status.lens);
