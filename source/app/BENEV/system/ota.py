@@ -3,9 +3,11 @@
 
 Runs as root, from benev-update@<action>.service (installed to /usr/local/lib/benev/ota.py;
 also `sudo benev-update <action>`):
-  check    ask GitHub for the latest release and note whether it is newer than this one
-  install  check, then download, verify and install it (refused while recording or on battery)
-  auto     what benev-update.timer runs: check, and install too if "auto_install" is on
+  check     ask GitHub for the latest release and note whether it is newer than this one
+  releases  list this repository's releases, optionally matching a search (see ota-request.json)
+  install   check, then download, verify and install the latest newer release, or the tag named
+            in ota-request.json / the second argument (that one may be older than what is installed)
+  auto      what benev-update.timer runs: check, and install too if "auto_install" is on
 
 A release is a tag vX.Y.Z pushed to the repository: .github/workflows/release.yml builds
 benev-install.sh and attaches it with its SHA-256 (and a signature, if a signing key is set
@@ -32,6 +34,7 @@ import sys
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -42,6 +45,8 @@ STATE = STATE_DIR / "state.json"
 REBOOT_FLAG = Path("/run/benev-reboot-required")   # set by the installer, gone after a reboot
 API = os.environ.get("BENEV_OTA_API", "https://api.github.com")   # override: tests only
 ASSET = "benev-install.sh"
+REQUEST_NAME = "ota-request.json"   # written by the dashboard, in the app directory, then removed
+TAG_RE = re.compile(r"v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.]+)?\Z")
 DASHBOARD = "http://127.0.0.1:8080"
 HEADERS = {"User-Agent": "benev-ota", "X-GitHub-Api-Version": "2022-11-28"}
 HEALTH_TIMEOUT_S = 90
@@ -159,6 +164,82 @@ def download(asset, token, dest):
         raise UpdateError(f"download of {asset['name']} failed: {getattr(e, 'reason', e)}")
     if dest.stat().st_size != asset["size"]:
         raise UpdateError(f"{asset['name']} is incomplete ({dest.stat().st_size} of {asset['size']} bytes)")
+
+
+def take_request(directory, action):
+    """The dashboard's one-shot request for this action, if it matches. The file is removed."""
+    path = directory / REQUEST_NAME
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        path.unlink(missing_ok=True)
+        return {}
+    if data.get("action") != action:
+        return {}
+    path.unlink(missing_ok=True)
+    return data
+
+
+def release_view(rel):
+    names = {a["name"] for a in rel.get("assets") or []}
+    return {"tag": rel.get("tag_name"), "name": rel.get("name") or rel.get("tag_name"),
+            "notes": ((rel.get("body") or "").strip())[:400], "published": rel.get("published_at"),
+            "prerelease": bool(rel.get("prerelease")),
+            "installable": ASSET in names and "benev-install.sh.sha256" in names}
+
+
+def list_releases(config, directory, query):
+    """Save up to 20 releases whose tag, name or notes contain `query` (blank = the newest)."""
+    current = current_version(directory)
+    if not config["repo"]:
+        save_state(status="not-configured", message=f"No update source: set \"repo\" in {CONFIG}",
+                   current=current, repo="", releases=[])
+        return
+    query = (query or "").strip()
+    save_state(status="checking", message=f"Searching releases of {config['repo']}" + (f" for {query!r}" if query else ""),
+               current=current, repo=config["repo"], error=None, log_tail=None)
+    found = github_json(f"/repos/{config['repo']}/releases?per_page=100", config["token"])
+    if not isinstance(found, list):
+        raise UpdateError("GitHub did not return a release list")
+    needle = query.lower()
+    rows = []
+    for rel in found:
+        if rel.get("draft"):
+            continue
+        view = release_view(rel)
+        hay = " ".join(str(view[k] or "") for k in ("tag", "name", "notes")).lower()
+        if needle and needle not in hay:
+            continue
+        rows.append(view)
+        if len(rows) >= 20:
+            break
+    shown = f"{len(rows)} release" + ("s" if len(rows) != 1 else "")
+    if query:
+        shown += f" match {query!r}"
+    save_state(status="listed", releases=rows, current=current, checked_at=round(time.time()), message=shown)
+
+
+def fetch_tag(config, directory, tag):
+    """One release, by tag, ready to install even when it is not newer than this one."""
+    if not TAG_RE.fullmatch(tag or ""):
+        raise UpdateError("a release tag looks like v1.2.3")
+    if not config["repo"]:
+        raise UpdateError(f"No update source: set \"repo\" in {CONFIG}")
+    current = current_version(directory)
+    save_state(status="checking", message=f"Looking up {tag}", current=current, repo=config["repo"],
+               error=None, log_tail=None)
+    rel = github_json(f"/repos/{config['repo']}/releases/tags/{urllib.parse.quote(tag)}", config["token"])
+    latest = {"tag": rel.get("tag_name"), "name": rel.get("name") or rel.get("tag_name"),
+              "notes": (rel.get("body") or "")[:4000], "published": rel.get("published_at"),
+              "url": rel.get("html_url")}
+    assets = {a["name"]: a for a in rel.get("assets", [])}
+    if ASSET not in assets:
+        raise UpdateError(f"release {tag} has no {ASSET}")
+    save_state(status="available", latest=latest, checked_at=round(time.time()),
+               message=f"{latest['tag']} selected (installed: {current})")
+    return latest, assets
 
 
 def check(config, directory):
@@ -306,8 +387,9 @@ def install(config, directory, user, found):
 
 def main():
     action = sys.argv[1] if len(sys.argv) > 1 else "check"
-    if action not in ("check", "install", "auto"):
-        sys.exit(f"usage: {sys.argv[0]} check|install|auto")
+    extra = sys.argv[2] if len(sys.argv) > 2 else None
+    if action not in ("check", "releases", "install", "auto"):
+        sys.exit(f"usage: {sys.argv[0]} check | releases [text] | install [vX.Y.Z] | auto")
     if os.geteuid() != 0:
         sys.exit("run as root")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -320,6 +402,20 @@ def main():
     try:
         config = load_config()
         user, directory = app_dir(config)
+        if action == "releases":
+            query = extra if extra is not None else take_request(directory, "releases").get("query", "")
+            list_releases(config, directory, query)
+            return
+        tag = extra if action == "install" else None
+        if action == "install" and tag is None:
+            tag = take_request(directory, "install").get("tag") or None
+        if tag:
+            found = fetch_tag(config, directory, tag)
+            reason = not_safe_reason()
+            if reason:
+                raise UpdateError(f"not installing {tag} now: {reason}")
+            install(config, directory, user, found)
+            return
         found = check(config, directory)
         if found and (action == "install" or (action == "auto" and config["auto_install"])):
             reason = not_safe_reason()

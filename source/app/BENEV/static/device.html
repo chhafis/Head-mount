@@ -107,6 +107,12 @@
       <button id="update-install" type="button" class="primary" hidden>Install</button>
       <button id="update-reboot" type="button" hidden>Restart now</button>
     </div>
+    <form id="update-search" class="update-search">
+      <input id="update-query" type="search" maxlength="80" enterkeyhint="search"
+             placeholder="Version or words from the notes" aria-label="Search releases">
+      <button type="submit">Search releases</button>
+    </form>
+    <ul id="update-releases" class="update-releases" hidden></ul>
     <pre class="update-log" id="update-log" hidden></pre>
   </section>
 

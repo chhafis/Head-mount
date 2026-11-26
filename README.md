@@ -239,7 +239,7 @@ priority 20 (they sleep between reads, so they take very little CPU).
 |---|---|
 | Fan & LEDs | The automatic outputs with what they are doing and why (fan, power-on, record and battery-low LEDs); the fan's normal speed; LED2 brightness and the spare green LED by hand. |
 | Power & buttons | USB-C power or battery, the shutdown countdown, how long to run on battery before shutting down, the battery-low threshold, and how often each button was pressed (to test them). |
-| Software update | Installed version, the newest release on GitHub, *Check for updates*, *Install*, and *Restart now* when an update changed boot settings. |
+| Software update | Installed version, the newest release on GitHub, *Check for updates*, *Search releases* (pick any version and install it), *Install*, and *Restart now* when an update changed boot settings. |
 | Camera | Live view, **Take photo**, a plain video **Record / Stop** (video only), resolution and frame rate for both, the video bitrate, optional raw DNG with photos, the **Camera** selector: *Camera 1* is the standard orientation and *Camera 2* turns the picture by 180° (the lens and edge calibrations follow the orientation; the setting is saved with every recording), and the list of photos and plain videos. The *Lens shading correction* box calibrates the lens and has **Check lens centring** (see below). |
 | Battery | MAX17048: charge %, voltage, charge rate, alert, 1-hour history. |
 | Motion | LSM6DSV16B: accelerometer, gyroscope, roll/pitch, temperature. |
@@ -595,12 +595,16 @@ git push origin main v1.0.0
 ```
 About a minute later the release appears under *Releases* with `benev-install.sh` and its
 SHA-256. That same file is also the installer for a fresh Pi. Versions must look like
-`v1.2.3` and go up; head mounts install only newer versions.
+`v1.2.3`. The automatic check installs only a newer version. *Search releases* on the Device
+page can install any of them, including an older one.
 
 ### On the head mount
 
 - Every 6 hours it checks for a new release; *Check for updates* on the Device page checks now.
-- **Install** shows when one is available. Installing takes a minute or two; the app restarts.
+  *Search releases* lists this repository's releases (leave the box empty for the newest, or type
+  part of a version or the notes). *Install* on a row installs that release, even if it is older
+  than the one on the head mount. The top *Install* button still installs only a newer latest release.
+- **Install** shows when a newer release is available. Installing takes a minute or two; the app restarts.
   Afterwards *Restart now* appears if the update changed boot settings (`config.txt`).
 - It **refuses to install while recording or running on battery**.
 - **Every download is verified** against its SHA-256 (and its signature, if you set up
@@ -610,7 +614,8 @@ SHA-256. That same file is also the installer for a fresh Pi. Versions must look
 - Automatic installs: set `"auto_install": true` in `/etc/benev/ota.json`. It then installs
   when it finds an update, if nothing is recording and USB-C power is connected (otherwise at
   the next check).
-- From SSH: `sudo benev-update check`, `sudo benev-update install`. State and logs:
+- From SSH: `sudo benev-update check`, `sudo benev-update releases` (or `sudo benev-update releases text`),
+  `sudo benev-update install` and `sudo benev-update install v1.2.3`. State and logs:
   `/var/lib/benev/ota/`, `journalctl -u 'benev-update@*'`.
 
 An update replaces the app, the Wi-Fi manager, the updater, the services and missing boot

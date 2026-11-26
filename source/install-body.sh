@@ -182,11 +182,11 @@ EOF
     cp /etc/systemd/system/benev-dashboard.service "$APP_DIR/benev-dashboard.service"
     chown "$TARGET_USER:$TARGET_USER" "$APP_DIR/benev-dashboard.service"
     # The app may run exactly these as root: power off / restart (buttons, unplugged on battery)
-    # and start the updater's check or install units. Nothing else.
+    # and start the updater's check, release search or install units. Nothing else.
     local rule=/etc/sudoers.d/benev-dashboard tmp
     tmp=$(mktemp)
     printf '%s ALL=(root) NOPASSWD: %s\n' "$TARGET_USER" \
-        "/usr/bin/systemctl poweroff, /usr/bin/systemctl reboot, /usr/bin/systemctl start --no-block benev-update@check.service, /usr/bin/systemctl start --no-block benev-update@install.service" > "$tmp"
+        "/usr/bin/systemctl poweroff, /usr/bin/systemctl reboot, /usr/bin/systemctl start --no-block benev-update@check.service, /usr/bin/systemctl start --no-block benev-update@releases.service, /usr/bin/systemctl start --no-block benev-update@install.service" > "$tmp"
     visudo -cqf "$tmp" || die "Generated sudoers rule failed validation."
     install -m 440 "$tmp" "$rule"
     rm -f "$tmp"

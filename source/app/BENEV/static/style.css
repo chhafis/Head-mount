@@ -455,6 +455,15 @@ button:disabled { opacity: 0.55; cursor: default; }
 .update-message.error::before { content: "\2715  "; color: var(--critical); font-weight: 700; }
 .update-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .update-actions button { padding: 8px 14px; }
+.update-search { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.update-search input {
+  flex: 1; min-width: 12rem; font: inherit; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+}
+.update-releases { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.update-releases li { display: grid; gap: 4px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.update-releases .release-meta, .update-releases .release-notes { color: var(--text-secondary); font-size: 12px; }
+.update-releases button { justify-self: start; padding: 6px 12px; }
 .update-notes pre, .update-log {
   margin: 6px 0 0; white-space: pre-wrap; font-size: 12px; max-height: 220px; overflow: auto;
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text-secondary);

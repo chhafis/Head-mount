@@ -1245,6 +1245,7 @@ function renderUpdate(u) {
   const busy = UPDATE_BUSY.has(u.status);
   const states = {
     "up-to-date": ["ok", "Up to date"], available: ["wait", "Update available"], installed: ["ok", "Updated"],
+    listed: ["wait", "Releases"],
     "rolled-back": ["error", "Update failed, rolled back"], failed: ["error", "Check failed"],
     "not-configured": ["wait", "No update source"], "never-checked": ["wait", "Not checked yet"],
   };
@@ -1271,7 +1272,10 @@ function renderUpdate(u) {
   install.dataset.label = install.hidden ? "" : `Install ${u.latest.tag}`;
   install.disabled = busy;
   document.getElementById("update-check").disabled = busy || u.status === "not-configured";
+  const search = document.querySelector("#update-search button");
+  if (search) search.disabled = busy || u.status === "not-configured";
   document.getElementById("update-reboot").hidden = !u.reboot_required;
+  renderReleases(u, busy);
   const logBox = document.getElementById("update-log");
   logBox.hidden = !(u.log_tail && u.log_tail.length);
   logBox.textContent = (u.log_tail || []).join("\n");
@@ -1288,9 +1292,9 @@ async function loadUpdate() {
   }
 }
 
-async function updateAction(action) {
+async function updateAction(action, extra) {
   try {
-    renderUpdate(await postJson("/api/update", { action }));
+    renderUpdate(await postJson("/api/update", { action, ...extra }));
     setTimeout(loadUpdate, 1500);
   } catch (e) {
     const m = document.getElementById("update-message");
@@ -1299,9 +1303,63 @@ async function updateAction(action) {
   }
 }
 
+let releaseKey = null;
+
+function renderReleases(u, busy) {
+  const list = document.getElementById("update-releases");
+  if (!list) return;
+  const rows = Array.isArray(u.releases) ? u.releases : null;
+  if (!rows) {
+    list.hidden = true;
+    return;
+  }
+  const key = JSON.stringify(rows);
+  if (key !== releaseKey) {
+    releaseKey = key;
+    list.replaceChildren();
+    if (!rows.length) {
+      list.hidden = u.status !== "listed";
+      if (!list.hidden) list.append(el("li", "muted", "No releases match."));
+      return;
+    }
+    list.hidden = false;
+    for (const rel of rows) {
+      const when = rel.published ? new Date(rel.published).toLocaleDateString() : "";
+      const li = el("li");
+      li.append(el("strong", "release-title", rel.name || rel.tag));
+      const meta = [rel.tag, when, rel.prerelease ? "pre-release" : "", rel.tag === u.version ? "installed" : ""]
+        .filter(Boolean).join(" · ");
+      li.append(el("span", "release-meta", meta));
+      if (rel.notes) li.append(el("span", "release-notes", rel.notes));
+      const button = el("button", rel.installable ? "primary" : "", rel.installable ? `Install ${rel.tag}` : "No installer");
+      button.type = "button";
+      button.dataset.label = button.textContent;
+      button.dataset.tag = rel.tag || "";
+      button.disabled = !rel.installable;
+      button.addEventListener("click", (ev) => {
+        if (secondTap(ev.currentTarget, "Tap again: the app restarts while it installs")) {
+          updateAction("install", { tag: rel.tag });
+        }
+      });
+      li.append(button);
+      list.append(li);
+    }
+  }
+  list.querySelectorAll("button").forEach((button) => {
+    const installed = button.dataset.tag && button.dataset.tag === u.version;
+    button.disabled = busy || installed || button.dataset.label === "No installer";
+    if (button.armedAt) return;
+    button.textContent = installed ? "Installed" : button.dataset.label;
+  });
+}
+
 document.getElementById("update-check").addEventListener("click", () => updateAction("check"));
 document.getElementById("update-install").addEventListener("click", (ev) => {
   if (secondTap(ev.currentTarget, "Tap again: the app restarts while it installs")) updateAction("install");
+});
+document.getElementById("update-search").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  updateAction("releases", { query: document.getElementById("update-query").value });
 });
 document.getElementById("update-reboot").addEventListener("click", (ev) => {
   if (secondTap(ev.currentTarget, "Tap again to restart")) systemAction("reboot", ev.currentTarget);

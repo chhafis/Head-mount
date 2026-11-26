@@ -17,7 +17,8 @@ the folder format. POST endpoints take JSON:
                      | "lens_calibrate" | "lens_reset" | "image" | "image_reset" | "brightness"
                      | "edge_boost", ...}
   /api/system       {"action": "shutdown" | "reboot"}
-  /api/update       {"action": "check" | "install"}       (GET: state of the GitHub updater)
+  /api/update       {"action": "check" | "releases" | "install", "query"?, "tag"?}
+                    (GET: state of the GitHub updater)
   /api/device       {"name"}  rename the head mount (name.local)   (GET: {"name", "address", "version"})
 GET /api/status: version, recording, power and battery in one small object.
 
@@ -54,7 +55,8 @@ BATTERY_HISTORY_S = 3600
 POWEROFF = ["sudo", "-n", "systemctl", "poweroff"]
 REBOOT = ["sudo", "-n", "systemctl", "reboot"]
 UPDATE_START = {a: ["sudo", "-n", "systemctl", "start", "--no-block", f"benev-update@{a}.service"]
-                for a in ("check", "install")}
+                for a in ("check", "releases", "install")}
+RELEASE_TAG_RE = re.compile(r"v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.]+)?\Z")
 OTA_STATE = Path("/var/lib/benev/ota/state.json")      # written by system/ota.py (root)
 REBOOT_FLAG = Path("/run/benev-reboot-required")        # an update changed config.txt
 WIFI_SOCKET = "/run/benev-wifi/wifi.sock"           # benev-wifi.service (runs as root)
@@ -75,6 +77,7 @@ def own_hosts():
     return {name, f"{name}.local", HOTSPOT_IP, "localhost", "127.0.0.1"}
 
 HERE = Path(__file__).resolve().parent
+OTA_REQUEST = HERE / "ota-request.json"   # one shot for the root updater; see system/ota.py
 STATIC = HERE / "static"
 try:
     VERSION = (HERE / "VERSION").read_text().splitlines()[0].strip()
@@ -560,14 +563,38 @@ class Handler(BaseHTTPRequestHandler):
             state = {"status": "unknown", "message": f"cannot read the update state: {e}"}
         return {**state, "version": VERSION, "reboot_required": REBOOT_FLAG.exists()}
 
+    def _write_ota_request(self, data):
+        tmp = OTA_REQUEST.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(OTA_REQUEST)
+
     def _post_update(self, body):
         action = body["action"]
         if action not in UPDATE_START:
             raise ValueError(f"unknown action {action!r}")
         if action == "install" and self.app.recording():
             raise RuntimeError("stop the recording before updating")
-        r = subprocess.run(UPDATE_START[action], capture_output=True, text=True, timeout=15)
+        if action == "releases":
+            query = body.get("query") or ""
+            if not isinstance(query, str) or len(query) > 80 or any(ord(c) < 32 for c in query):
+                raise ValueError("the search text must be 80 characters or fewer")
+            self._write_ota_request({"action": "releases", "query": query.strip()})
+        elif action == "install" and body.get("tag"):
+            tag = body["tag"]
+            if not isinstance(tag, str) or not RELEASE_TAG_RE.fullmatch(tag):
+                raise ValueError("a release tag looks like v1.2.3")
+            self._write_ota_request({"action": "install", "tag": tag})
+        elif action == "install":
+            OTA_REQUEST.unlink(missing_ok=True)   # install the newest release, not a tag left over from a search
+        try:
+            r = subprocess.run(UPDATE_START[action], capture_output=True, text=True, timeout=15)
+        except OSError as e:
+            if action in ("releases", "install"):
+                OTA_REQUEST.unlink(missing_ok=True)
+            raise RuntimeError(f"could not start the updater: {e}") from e
         if r.returncode != 0:
+            if action in ("releases", "install"):
+                OTA_REQUEST.unlink(missing_ok=True)
             raise RuntimeError(f"could not start the updater: {(r.stderr or r.stdout).strip() or r.returncode}")
         self._send_json({"ok": True, **self._update_state()})
 
